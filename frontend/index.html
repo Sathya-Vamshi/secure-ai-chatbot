@@ -1,0 +1,1512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verity — Secure AI Chatbot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #12182B;
+    --ink-2: #1A2138;
+    --ink-3: #232C4A;
+    --ink-line: #2C3555;
+    --ink-text: #C9CEDE;
+    --ink-text-dim: #838CAD;
+
+    --paper: #F5F6F4;
+    --surface: #FFFFFF;
+    --line: #E3E5E1;
+
+    --accent: #1F7A5C;
+    --accent-hover: #18614A;
+    --accent-soft: #E3F2EC;
+
+    --danger: #B3261E;
+    --danger-soft: #FBEAE8;
+
+    --muted-badge: #667085;
+    --muted-badge-soft: #EEF0F2;
+
+    --warn: #9A6700;
+    --warn-soft: #FBF0D9;
+
+    --text: #14181F;
+    --text-muted: #626A72;
+    --text-faint: #93989F;
+
+    --serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    --radius-lg: 16px;
+    --radius-md: 10px;
+    --radius-sm: 8px;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--paper);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, textarea, select { font-family: inherit; }
+  ::selection { background: var(--accent-soft); color: var(--accent-hover); }
+
+  /* ---------------------------------------------------------- */
+  /* Login screen                                                */
+  /* ---------------------------------------------------------- */
+  #loginScreen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      radial-gradient(circle at 18% 20%, rgba(31,122,92,0.16), transparent 42%),
+      linear-gradient(180deg, var(--ink) 0%, #0D1220 100%);
+    padding: 24px;
+  }
+  .login-card {
+    width: 100%;
+    max-width: 400px;
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    padding: 40px 36px 32px;
+    box-shadow: 0 24px 60px rgba(6, 10, 20, 0.45);
+    animation: rise 0.5s cubic-bezier(.2,.8,.2,1);
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .brand-mark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 22px;
+  }
+  .brand-glyph {
+    width: 34px; height: 34px;
+    border-radius: 9px;
+    background: linear-gradient(155deg, var(--accent) 0%, #14523E 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-family: var(--serif); font-weight: 600; font-size: 17px;
+    flex-shrink: 0;
+  }
+  .brand-name {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 19px;
+    letter-spacing: -0.01em;
+  }
+  .login-card h1 {
+    font-family: var(--serif);
+    font-size: 24px;
+    font-weight: 600;
+    margin: 0 0 6px;
+    letter-spacing: -0.01em;
+  }
+  .login-card .lede {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0 0 26px;
+    line-height: 1.5;
+  }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .field input {
+    width: 100%;
+    padding: 11px 13px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    font-size: 14.5px;
+    background: var(--surface);
+    color: var(--text);
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .field input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 11px 18px;
+    background: var(--ink);
+    color: white;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background .15s, transform .05s;
+  }
+  .btn:hover { background: #1E2643; }
+  .btn:active { transform: scale(0.98); }
+  .btn:disabled { background: #C7CAD1; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-block { width: 100%; }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--line);
+  }
+  .btn-ghost:hover { background: var(--paper); }
+  .btn-danger-ghost {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid #EFC9C5;
+  }
+  .btn-danger-ghost:hover { background: var(--danger-soft); }
+  .btn-sm { padding: 6px 12px; font-size: 12.5px; }
+
+  .login-hint {
+    margin-top: 18px;
+    padding: 11px 13px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+  .login-hint code {
+    font-family: var(--mono);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--text);
+  }
+  .form-status {
+    font-size: 13px;
+    margin-top: 4px;
+    min-height: 18px;
+  }
+  .form-status.err { color: var(--danger); }
+  .form-status.info { color: var(--text-muted); }
+  .form-status.ok { color: var(--accent-hover); }
+
+  /* ---------------------------------------------------------- */
+  /* App shell                                                   */
+  /* ---------------------------------------------------------- */
+  #appShell {
+    display: none;
+    height: 100vh;
+  }
+  #appShell.active { display: flex; }
+
+  .sidebar {
+    width: 264px;
+    flex-shrink: 0;
+    background: var(--ink);
+    color: var(--ink-text);
+    display: flex;
+    flex-direction: column;
+    padding: 18px 14px;
+  }
+  .sidebar .brand-mark { padding: 4px 6px 20px; }
+  .sidebar .brand-name { color: #fff; }
+
+  .side-btn {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    color: var(--ink-text);
+    border-radius: var(--radius-sm);
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    transition: background .12s, color .12s;
+  }
+  .side-btn:hover { background: var(--ink-3); color: #fff; }
+  .side-btn.active { background: var(--ink-3); color: #fff; }
+  .side-btn .ic { width: 17px; text-align: center; opacity: .9; }
+
+  .new-chat-btn {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+    background: var(--ink-2);
+    border: 1px solid var(--ink-line);
+    color: #fff;
+    border-radius: var(--radius-sm);
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .new-chat-btn:hover { background: var(--ink-3); }
+
+  .side-section-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ink-text-dim);
+    padding: 16px 12px 6px;
+  }
+
+  .sidebar-spacer { flex: 1; }
+
+  .side-history {
+    overflow-y: auto;
+    max-height: 30vh;
+    margin-top: 2px;
+  }
+  .side-history-item {
+    padding: 8px 12px;
+    font-size: 12.5px;
+    color: var(--ink-text-dim);
+    line-height: 1.4;
+    border-radius: var(--radius-sm);
+  }
+
+  .sidebar-footer {
+    border-top: 1px solid var(--ink-line);
+    padding-top: 12px;
+    margin-top: 8px;
+  }
+  .user-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+  }
+  .user-avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--ink-3);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 600;
+    flex-shrink: 0;
+    text-transform: uppercase;
+  }
+  .user-meta { flex: 1; min-width: 0; }
+  .user-name { font-size: 13px; font-weight: 500; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-role {
+    font-size: 10.5px;
+    color: var(--ink-text-dim);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .logout-link {
+    background: none; border: none; cursor: pointer;
+    color: var(--ink-text-dim);
+    font-size: 15px;
+    padding: 4px;
+    line-height: 1;
+    border-radius: 6px;
+  }
+  .logout-link:hover { color: #fff; background: var(--ink-3); }
+
+  /* ---------------------------------------------------------- */
+  /* Main panel                                                   */
+  /* ---------------------------------------------------------- */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--paper);
+  }
+  .topbar {
+    height: 56px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+  .topbar h2 {
+    font-family: var(--serif);
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .topbar-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+
+  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
+  .view.active { display: flex; }
+
+  /* ---------------------------------------------------------- */
+  /* Chat view                                                    */
+  /* ---------------------------------------------------------- */
+  #chatScroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 24px 8px;
+  }
+  .chat-col { max-width: 720px; margin: 0 auto; }
+
+  .empty-chat {
+    max-width: 520px;
+    margin: 10vh auto 0;
+    text-align: center;
+  }
+  .empty-chat .glyph-big {
+    width: 52px; height: 52px; margin: 0 auto 18px;
+    border-radius: 14px;
+    background: linear-gradient(155deg, var(--accent) 0%, #14523E 100%);
+    color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--serif); font-weight: 600; font-size: 24px;
+  }
+  .empty-chat h3 {
+    font-family: var(--serif);
+    font-size: 20px;
+    margin: 0 0 8px;
+  }
+  .empty-chat p { color: var(--text-muted); font-size: 14px; line-height: 1.55; margin: 0 0 20px; }
+  .suggestion-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    text-align: left;
+  }
+  .suggestion-chip {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color .12s, background .12s;
+  }
+  .suggestion-chip:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+  .msg-row { display: flex; margin-bottom: 20px; gap: 12px; }
+  .msg-row.user { flex-direction: row-reverse; }
+  .msg-avatar {
+    width: 28px; height: 28px; border-radius: 8px;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600;
+  }
+  .msg-row.user .msg-avatar { background: var(--ink); color: #fff; }
+  .msg-row.bot .msg-avatar { background: var(--accent); color: #fff; }
+  .msg-body { max-width: 78%; }
+  .msg-row.user .msg-body { display: flex; flex-direction: column; align-items: flex-end; }
+  .bubble {
+    padding: 11px 15px;
+    border-radius: var(--radius-md);
+    font-size: 14.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .msg-row.user .bubble { background: var(--ink); color: #fff; border-top-right-radius: 4px; }
+  .msg-row.bot .bubble { background: var(--surface); border: 1px solid var(--line); border-top-left-radius: 4px; }
+  .bubble.alert { background: var(--danger-soft); border-color: #F1C6C1; color: #7A1A14; }
+
+  .msg-meta { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .meta-pill {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--paper);
+    border: 1px solid var(--line);
+    padding: 2px 8px;
+    border-radius: 20px;
+  }
+
+  .typing-dots { display: inline-flex; gap: 4px; padding: 4px 2px; }
+  .typing-dots span {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-faint);
+    animation: bounce 1.1s infinite ease-in-out;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: .15s; }
+  .typing-dots span:nth-child(3) { animation-delay: .3s; }
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: .5; }
+    30% { transform: translateY(-4px); opacity: 1; }
+  }
+
+  .composer-wrap {
+    padding: 14px 24px 22px;
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+  }
+  .composer {
+    max-width: 720px;
+    margin: 0 auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 8px 8px 8px 16px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .composer textarea {
+    flex: 1;
+    border: none;
+    outline: none;
+    resize: none;
+    font-size: 14.5px;
+    line-height: 1.5;
+    max-height: 160px;
+    padding: 8px 0;
+    font-family: var(--sans);
+    background: transparent;
+  }
+  .send-btn {
+    width: 34px; height: 34px;
+    border-radius: 10px;
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+    transition: background .12s;
+  }
+  .send-btn:hover { background: var(--accent); }
+  .send-btn:disabled { background: #D7D9DC; cursor: not-allowed; }
+  .composer-hint {
+    max-width: 720px;
+    margin: 8px auto 0;
+    font-size: 11.5px;
+    color: var(--text-faint);
+    text-align: center;
+  }
+
+  /* ---------------------------------------------------------- */
+  /* Generic content views (documents / team / audit)             */
+  /* ---------------------------------------------------------- */
+  .content-scroll { flex: 1; overflow-y: auto; padding: 24px; }
+  .content-col { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 20px 22px;
+  }
+  .panel h3 {
+    font-family: var(--serif);
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .panel .panel-sub { font-size: 12.5px; color: var(--text-muted); margin: 0 0 16px; }
+  .panel-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .panel-row > .panel { flex: 1; min-width: 280px; }
+
+  .stat-strip { display: flex; gap: 12px; }
+  .stat-box {
+    flex: 1;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+  }
+  .stat-box .num { font-family: var(--serif); font-size: 26px; font-weight: 600; }
+  .stat-box .label { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  input[type=text], input[type=password], input[type=file], select, textarea.plain {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    font-size: 13.5px;
+    background: var(--surface);
+    color: var(--text);
+    margin-bottom: 10px;
+  }
+  textarea.plain { resize: vertical; font-family: var(--mono); font-size: 13px; line-height: 1.6; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  label.field-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 5px; }
+
+  table.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.data-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--text-faint);
+    font-weight: 600;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  table.data-table td {
+    padding: 10px 10px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.data-table tr:last-child td { border-bottom: none; }
+  table.data-table .mono { font-family: var(--mono); font-size: 12px; color: var(--text-muted); }
+  table.data-table .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .badge {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .01em;
+  }
+  .badge.safe { background: var(--accent-soft); color: var(--accent-hover); }
+  .badge.tampered { background: var(--danger-soft); color: var(--danger); }
+  .badge.missing { background: var(--danger-soft); color: var(--danger); }
+  .badge.superseded { background: var(--muted-badge-soft); color: var(--muted-badge); }
+  .badge.denied, .badge.blocked { background: var(--danger-soft); color: var(--danger); }
+  .badge.success { background: var(--accent-soft); color: var(--accent-hover); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+
+  .empty-note {
+    color: var(--text-faint);
+    font-size: 13px;
+    padding: 18px 0;
+    text-align: center;
+  }
+
+  .key-reveal {
+    margin-top: 12px;
+    padding: 13px 14px;
+    background: var(--accent-soft);
+    border: 1px solid #BCE0D1;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    color: #123F31;
+  }
+  .key-reveal code {
+    display: block;
+    margin-top: 6px;
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 500;
+    background: var(--surface);
+    border: 1px solid #BCE0D1;
+    padding: 7px 10px;
+    border-radius: 6px;
+  }
+
+  .toggle-group { display: flex; gap: 6px; margin-bottom: 14px; }
+  .toggle-btn {
+    padding: 7px 13px;
+    border-radius: 20px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .toggle-btn.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #D6D9D4; border-radius: 8px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+
+  @media (max-width: 860px) {
+    .sidebar { width: 220px; }
+    .suggestion-grid { grid-template-columns: 1fr; }
+    .panel-row > .panel { min-width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<!-- LOGIN SCREEN                                                   -->
+<!-- ============================================================ -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="brand-mark">
+      <div class="brand-glyph">V</div>
+      <div class="brand-name">Verity</div>
+    </div>
+    <h1>Sign in</h1>
+    <p class="lede">Secure AI document assistant with integrity verification and a full audit trail.</p>
+
+    <form id="loginForm" onsubmit="return false;">
+      <div class="field">
+        <label for="username">Username</label>
+        <input type="text" id="username" value="admin" autocomplete="username">
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" value="admin123" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="login()" type="submit">Sign in</button>
+      <div id="loginStatus" class="form-status"></div>
+    </form>
+
+    <div class="login-hint">
+      Demo owner account — username <code>admin</code>, password <code>admin123</code>.
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- APP SHELL                                                      -->
+<!-- ============================================================ -->
+<div id="appShell">
+
+  <aside class="sidebar">
+    <div class="brand-mark">
+      <div class="brand-glyph">V</div>
+      <div class="brand-name">Verity</div>
+    </div>
+
+    <button class="new-chat-btn" onclick="startNewChat()">
+      <span class="ic">＋</span> New chat
+    </button>
+
+    <button class="side-btn active" data-view="chat" onclick="setView('chat')"><span class="ic">💬</span> Chat</button>
+    <button class="side-btn" data-view="documents" onclick="setView('documents')"><span class="ic">📄</span> Documents</button>
+    <button class="side-btn" id="navTeam" data-view="team" onclick="setView('team')" style="display:none;"><span class="ic">👥</span> Team &amp; Access</button>
+    <button class="side-btn" id="navAudit" data-view="audit" onclick="setView('audit')" style="display:none;"><span class="ic">🛡️</span> Audit Log</button>
+
+    <div class="sidebar-spacer"></div>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="user-avatar" id="userAvatar">?</div>
+        <div class="user-meta">
+          <div class="user-name" id="whoami">—</div>
+          <div class="user-role" id="whorole">—</div>
+        </div>
+        <button class="logout-link" onclick="logout()" title="Log out">⏻</button>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+
+    <!-- ---------------- CHAT VIEW ---------------- -->
+    <section class="view active" id="view-chat">
+      <div class="topbar">
+        <h2>Chat</h2>
+        <div class="topbar-status"><span class="dot"></span> <span id="docContextLabel">No document loaded</span></div>
+      </div>
+
+      <div id="chatScroll" class="scrollbar-thin">
+        <div class="chat-col" id="chatCol">
+          <div class="empty-chat" id="emptyChat">
+            <div class="glyph-big">V</div>
+            <h3>Ask me anything</h3>
+            <p>I can answer questions about your uploaded document, verify what's in it, or just chat generally — like a regular assistant.</p>
+            <div class="suggestion-grid">
+              <div class="suggestion-chip" onclick="fillComposer('What is this document about?')">What is this document about?</div>
+              <div class="suggestion-chip" onclick="fillComposer('How many words and letters are in this document?')">How many words &amp; letters are in it?</div>
+              <div class="suggestion-chip" onclick="fillComposer('Summarize the key points.')">Summarize the key points</div>
+              <div class="suggestion-chip" onclick="fillComposer('What can you help me with?')">What can you help me with?</div>
+            </div>
+          </div>
+          <div id="messages"></div>
+        </div>
+      </div>
+
+      <div class="composer-wrap">
+        <div class="composer">
+          <textarea id="messageInput" rows="1" placeholder="Message Verity…"
+            onkeydown="handleComposerKey(event)" oninput="autoGrow(this)"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()">↑</button>
+        </div>
+        <div class="composer-hint">Verity can make mistakes. Document answers are checked against a verified hash.</div>
+      </div>
+    </section>
+
+    <!-- ---------------- DOCUMENTS VIEW ---------------- -->
+    <section class="view" id="view-documents">
+      <div class="topbar"><h2>Documents</h2></div>
+      <div class="content-scroll scrollbar-thin">
+        <div class="content-col">
+
+          <div class="panel">
+            <div class="stat-strip">
+              <div class="stat-box"><div class="num" id="documentCount">–</div><div class="label">Documents on file</div></div>
+              <div class="stat-box"><div class="num" id="attackCount">–</div><div class="label">Blocked security events</div></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <h3>Upload a document</h3>
+            <p class="panel-sub">New uploads are hashed (SHA-256) and backed up automatically. Re-uploading a filename supersedes the previous version — nothing is deleted.</p>
+            <input type="file" id="fileInput">
+            <button class="btn btn-primary" onclick="uploadFile()">Upload</button>
+            <div id="uploadStatus" class="form-status"></div>
+          </div>
+
+          <div class="panel">
+            <h3>All documents</h3>
+            <p class="panel-sub">Active version per document family. Use Versions to see full history.</p>
+            <div id="docsTableWrap"><div class="empty-note">Loading…</div></div>
+            <div id="integrityStatus" class="form-status"></div>
+          </div>
+
+          <div class="panel" id="employeeToolsPanel">
+            <h3>Edit document (authorized)</h3>
+            <p class="panel-sub">Pick a document to load its current text, then edit only the part you need to change — this is the full last-saved version, not a blank box.</p>
+            <label class="field-label">Document</label>
+            <select id="editDocSelect" onchange="onEditDocSelected()"></select>
+            <label class="field-label">Authorization key</label>
+            <input type="text" id="editAuthKey" placeholder="AUTH-7K92-M4PX">
+            <label class="field-label">Document content</label>
+            <textarea id="editContent" class="plain" rows="10" placeholder="Select a document above to load its current content…"></textarea>
+            <button class="btn btn-primary" onclick="submitAuthorizedEdit()">Submit edit</button>
+            <div id="editStatus" class="form-status"></div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- TEAM & ACCESS VIEW (owner) ---------------- -->
+    <section class="view" id="view-team">
+      <div class="topbar"><h2>Team &amp; Access</h2></div>
+      <div class="content-scroll scrollbar-thin">
+        <div class="content-col">
+          <div class="panel-row">
+            <div class="panel">
+              <h3>Create employee account</h3>
+              <p class="panel-sub">Employees can edit a document only with a key you generate for that specific document.</p>
+              <label class="field-label">Username</label>
+              <input type="text" id="newEmpUsername" placeholder="e.g. rahul">
+              <label class="field-label">Temporary password</label>
+              <input type="password" id="newEmpPassword" placeholder="At least 6 characters">
+              <button class="btn btn-primary" onclick="createEmployee()">Create employee</button>
+              <div id="employeeStatus" class="form-status"></div>
+            </div>
+
+            <div class="panel">
+              <h3>Generate authorization key</h3>
+              <p class="panel-sub">One key = one employee, one document, until it expires or runs out of uses.</p>
+              <label class="field-label">Document</label>
+              <select id="authDocSelect"></select>
+              <label class="field-label">Employee username</label>
+              <input type="text" id="authEmployee" placeholder="e.g. rahul">
+              <label class="field-label">Expiry (optional)</label>
+              <input type="text" id="authExpiry" placeholder="2026-12-31">
+              <label class="field-label">Max uses (optional)</label>
+              <input type="text" id="authMaxUses" placeholder="e.g. 1">
+              <button class="btn btn-primary" onclick="generateAuthKey()">Generate key</button>
+              <div id="authStatus" class="form-status"></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <h3 style="margin-bottom:2px;">Active authorization keys</h3>
+              <button class="btn btn-ghost btn-sm" onclick="refreshAuthorizations()">Refresh</button>
+            </div>
+            <p class="panel-sub">Keys are hashed at rest — the raw key is only ever shown once, at creation.</p>
+            <div id="authList"><div class="empty-note">No active authorizations.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- AUDIT LOG VIEW (owner) ---------------- -->
+    <section class="view" id="view-audit">
+      <div class="topbar">
+        <h2>Audit Log</h2>
+        <button class="btn btn-ghost btn-sm" onclick="loadAuditView()">Refresh</button>
+      </div>
+      <div class="content-scroll scrollbar-thin">
+        <div class="content-col">
+          <div class="panel">
+            <p class="panel-sub" style="margin-bottom:14px;">Every login, upload, edit, key action, and blocked attempt is recorded here — the single place to check if something needs investigating.</p>
+            <div class="toggle-group">
+              <button class="toggle-btn active" id="tabAuditTrail" onclick="switchAuditTab('trail')">Audit trail</button>
+              <button class="toggle-btn" id="tabSecurityEvents" onclick="switchAuditTab('security')">Security events</button>
+            </div>
+            <div id="auditTrailWrap"><div class="empty-note">Loading…</div></div>
+            <div id="securityEventsWrap" style="display:none;"><div class="empty-note">Loading…</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script>
+const API = "http://127.0.0.1:8000";
+
+let token = localStorage.getItem("sac_token") || null;
+let currentRole = localStorage.getItem("sac_role") || null;
+let currentUsername = localStorage.getItem("sac_username") || null;
+let currentDocumentId = null;
+let chatLoaded = false;
+
+/* ---------------------------------------------------------------- */
+/* Auth                                                               */
+/* ---------------------------------------------------------------- */
+
+async function login() {
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value;
+  const statusEl = document.getElementById("loginStatus");
+  statusEl.className = "form-status info";
+  statusEl.innerText = "Signing in…";
+
+  try {
+    const body = new URLSearchParams();
+    body.append("username", username);
+    body.append("password", password);
+
+    const res = await fetch(`${API}/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body
+    });
+    const data = await res.json();
+
+    if (res.ok && data.access_token) {
+      token = data.access_token;
+      currentRole = data.role || "employee";
+      currentUsername = username;
+      localStorage.setItem("sac_token", token);
+      localStorage.setItem("sac_role", currentRole);
+      localStorage.setItem("sac_username", username);
+      enterApp();
+    } else {
+      statusEl.className = "form-status err";
+      statusEl.innerText = "❌ " + (data.detail || data.message || "Login failed");
+    }
+  } catch (e) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ Could not reach the backend. Is uvicorn running on " + API + "?";
+  }
+}
+
+function logout() {
+  token = null; currentRole = null; currentUsername = null;
+  localStorage.removeItem("sac_token");
+  localStorage.removeItem("sac_role");
+  localStorage.removeItem("sac_username");
+  chatLoaded = false;
+  document.getElementById("messages").innerHTML = "";
+  document.getElementById("emptyChat").style.display = "block";
+  document.getElementById("appShell").classList.remove("active");
+  document.getElementById("loginScreen").style.display = "flex";
+}
+
+function enterApp() {
+  document.getElementById("loginScreen").style.display = "none";
+  document.getElementById("appShell").classList.add("active");
+  document.getElementById("whoami").innerText = currentUsername || "—";
+  document.getElementById("whorole").innerText = currentRole || "—";
+  document.getElementById("userAvatar").innerText = (currentUsername || "?").slice(0, 1);
+  document.getElementById("navTeam").style.display = currentRole === "owner" ? "flex" : "none";
+  document.getElementById("navAudit").style.display = currentRole === "owner" ? "flex" : "none";
+
+  setView("chat");
+  loadChatHistory();
+  loadDocumentsView();
+}
+
+async function authedFetch(path, options = {}) {
+  options.headers = options.headers || {};
+  options.headers["Authorization"] = "Bearer " + token;
+  const res = await fetch(`${API}${path}`, options);
+  if (res.status === 401) {
+    logout();
+    throw new Error("Session expired — please log in again.");
+  }
+  return res;
+}
+
+/* ---------------------------------------------------------------- */
+/* Navigation                                                         */
+/* ---------------------------------------------------------------- */
+
+function setView(name) {
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  document.getElementById("view-" + name).classList.add("active");
+  document.querySelectorAll(".side-btn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
+
+  if (name === "documents") loadDocumentsView();
+  if (name === "team" && currentRole === "owner") { populateDocSelect("authDocSelect"); refreshAuthorizations(); }
+  if (name === "audit" && currentRole === "owner") loadAuditView();
+}
+
+/* ---------------------------------------------------------------- */
+/* Chat                                                                */
+/* ---------------------------------------------------------------- */
+
+function autoGrow(el) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 160) + "px";
+}
+
+function handleComposerKey(e) {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage();
+  }
+}
+
+function fillComposer(text) {
+  const input = document.getElementById("messageInput");
+  input.value = text;
+  input.focus();
+  autoGrow(input);
+}
+
+function hideEmptyChat() {
+  document.getElementById("emptyChat").style.display = "none";
+}
+
+function addMessage(text, sender, metaParts, isAlert) {
+  hideEmptyChat();
+  const messages = document.getElementById("messages");
+  const row = document.createElement("div");
+  row.className = "msg-row " + sender;
+
+  const avatar = document.createElement("div");
+  avatar.className = "msg-avatar";
+  avatar.innerText = sender === "user" ? (currentUsername || "U").slice(0, 1).toUpperCase() : "V";
+
+  const body = document.createElement("div");
+  body.className = "msg-body";
+
+  const bubble = document.createElement("div");
+  bubble.className = "bubble" + (isAlert ? " alert" : "");
+  bubble.innerText = text;
+  body.appendChild(bubble);
+
+  if (metaParts && metaParts.length) {
+    const meta = document.createElement("div");
+    meta.className = "msg-meta";
+    metaParts.forEach(p => {
+      const pill = document.createElement("span");
+      pill.className = "meta-pill";
+      pill.innerText = p;
+      meta.appendChild(pill);
+    });
+    body.appendChild(meta);
+  }
+
+  row.appendChild(avatar);
+  row.appendChild(body);
+  messages.appendChild(row);
+
+  const scroller = document.getElementById("chatScroll");
+  scroller.scrollTop = scroller.scrollHeight;
+}
+
+function addTypingIndicator() {
+  hideEmptyChat();
+  const messages = document.getElementById("messages");
+  const row = document.createElement("div");
+  row.className = "msg-row bot";
+  row.id = "typingRow";
+  row.innerHTML = `
+    <div class="msg-avatar">V</div>
+    <div class="msg-body"><div class="bubble"><span class="typing-dots"><span></span><span></span><span></span></span></div></div>
+  `;
+  messages.appendChild(row);
+  const scroller = document.getElementById("chatScroll");
+  scroller.scrollTop = scroller.scrollHeight;
+}
+
+function removeTypingIndicator() {
+  const el = document.getElementById("typingRow");
+  if (el) el.remove();
+}
+
+async function loadChatHistory() {
+  try {
+    const res = await authedFetch("/chat/history");
+    const data = await res.json();
+    const history = data.history || [];
+    document.getElementById("messages").innerHTML = "";
+    if (history.length === 0) {
+      document.getElementById("emptyChat").style.display = "block";
+    } else {
+      hideEmptyChat();
+      history.forEach(turn => {
+        addMessage(turn.message, turn.sender === "bot" ? "bot" : "user");
+      });
+    }
+    chatLoaded = true;
+  } catch (e) { console.error(e); }
+}
+
+async function startNewChat() {
+  try { await authedFetch("/chat/history", { method: "DELETE" }); } catch (e) { /* ignore */ }
+  document.getElementById("messages").innerHTML = "";
+  document.getElementById("emptyChat").style.display = "block";
+  setView("chat");
+}
+
+async function sendMessage() {
+  const input = document.getElementById("messageInput");
+  const message = input.value.trim();
+  if (!message) return;
+
+  addMessage(message, "user");
+  input.value = "";
+  input.style.height = "auto";
+  document.getElementById("sendBtn").disabled = true;
+  addTypingIndicator();
+
+  try {
+    const res = await authedFetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message })
+    });
+    const data = await res.json();
+    removeTypingIndicator();
+
+    const meta = [];
+    if (data.model_used) meta.push(data.model_used);
+    if (typeof data.response_time_seconds === "number") meta.push(data.response_time_seconds + "s");
+    if (data.cached) meta.push("cached");
+
+    const isAlert = !!data.error || (data.message || "").startsWith("⚠️");
+    addMessage(data.message || "(no response)", "bot", meta, isAlert);
+  } catch (e) {
+    removeTypingIndicator();
+    addMessage("Couldn't reach the backend: " + e.message, "bot", null, true);
+  } finally {
+    document.getElementById("sendBtn").disabled = false;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Documents                                                           */
+/* ---------------------------------------------------------------- */
+
+function statusBadge(status) {
+  const map = { SAFE: "safe", TAMPERED: "tampered", MISSING: "missing", SUPERSEDED: "superseded" };
+  const cls = map[status] || "superseded";
+  return `<span class="badge ${cls}">${status}</span>`;
+}
+
+async function loadDocumentsView() {
+  await refreshStats();
+  await renderDocumentsTable();
+  document.getElementById("employeeToolsPanel").style.display = currentRole ? "block" : "none";
+  if (currentRole) populateDocSelect("editDocSelect");
+}
+
+async function refreshStats() {
+  try {
+    const docRes = await authedFetch("/documents/count");
+    const docData = await docRes.json();
+    document.getElementById("documentCount").innerText = docData.count ?? "–";
+
+    const logRes = await authedFetch("/security-logs");
+    const logData = await logRes.json();
+    const events = Array.isArray(logData) ? logData : (logData.events || []);
+    document.getElementById("attackCount").innerText = events.length;
+  } catch (e) { console.error(e); }
+}
+
+async function renderDocumentsTable() {
+  const wrap = document.getElementById("docsTableWrap");
+  try {
+    const res = await authedFetch("/documents");
+    const data = await res.json();
+    const docs = data.documents || [];
+    if (docs.length === 0) {
+      wrap.innerHTML = `<div class="empty-note">No documents uploaded yet — upload one above to get started.</div>`;
+      document.getElementById("docContextLabel").innerText = "No document loaded";
+      return;
+    }
+    if (!currentDocumentId) currentDocumentId = docs[docs.length - 1].id;
+    document.getElementById("docContextLabel").innerText = "Active: " + docs[docs.length - 1].filename;
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Document</th><th>Version</th><th>Status</th><th>Uploaded by</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${docs.map(d => `
+            <tr>
+              <td>${escapeHtml(d.filename)}</td>
+              <td class="mono">v${d.version}</td>
+              <td>${statusBadge(d.status)}</td>
+              <td class="mono">${escapeHtml(d.owner_username || d.created_by || "—")}</td>
+              <td class="actions">
+                <button class="btn btn-ghost btn-sm" onclick="checkIntegrity(${d.id})">Check integrity</button>
+                <button class="btn btn-ghost btn-sm" onclick="restoreDocument(${d.id})">Restore backup</button>
+              </td>
+            </tr>`).join("")}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    wrap.innerHTML = `<div class="empty-note">Couldn't load documents.</div>`;
+  }
+}
+
+async function uploadFile() {
+  const fileInput = document.getElementById("fileInput");
+  const statusEl = document.getElementById("uploadStatus");
+
+  if (fileInput.files.length === 0) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "Choose a file first.";
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+  statusEl.className = "form-status info";
+  statusEl.innerText = "Uploading…";
+
+  try {
+    const res = await authedFetch("/upload", { method: "POST", body: formData });
+    const data = await res.json();
+    if (res.ok) {
+      currentDocumentId = data.document_id;
+      statusEl.className = "form-status ok";
+      statusEl.innerText = `✅ Uploaded "${data.filename}" (v${data.version})`;
+      fileInput.value = "";
+      loadDocumentsView();
+    } else {
+      statusEl.className = "form-status err";
+      statusEl.innerText = "❌ " + (data.message || data.detail || "Upload failed");
+    }
+  } catch (e) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ " + e.message;
+  }
+}
+
+async function checkIntegrity(docId) {
+  const statusEl = document.getElementById("integrityStatus");
+  statusEl.className = "form-status info";
+  statusEl.innerText = "Checking…";
+  try {
+    const res = await authedFetch(`/integrity/${docId}`);
+    const data = await res.json();
+    if (data.status === "SAFE" || data.status === "SUPERSEDED") {
+      statusEl.className = "form-status ok";
+      statusEl.innerText = "✅ " + (data.message || "No changes detected.");
+    } else {
+      statusEl.className = "form-status err";
+      statusEl.innerText = "⚠️ " + (data.message || "Integrity check failed.");
+    }
+  } catch (e) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ " + e.message;
+  }
+}
+
+async function restoreDocument(docId) {
+  const statusEl = document.getElementById("integrityStatus");
+  statusEl.className = "form-status info";
+  statusEl.innerText = "Restoring…";
+  try {
+    const res = await authedFetch(`/restore/${docId}`, { method: "POST" });
+    const data = await res.json();
+    statusEl.className = res.ok ? "form-status ok" : "form-status err";
+    statusEl.innerText = (res.ok ? "✅ " : "❌ ") + (data.message || JSON.stringify(data));
+    if (res.ok) renderDocumentsTable();
+  } catch (e) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ " + e.message;
+  }
+}
+
+async function populateDocSelect(selectId) {
+  try {
+    const res = await authedFetch("/documents");
+    const data = await res.json();
+    const select = document.getElementById(selectId);
+    const docs = data.documents || [];
+    select.innerHTML = docs.map(d =>
+      `<option value="${d.id}">${escapeHtml(d.filename)} (v${d.version}, ${d.status})</option>`
+    ).join("") || `<option disabled>No documents uploaded yet</option>`;
+    if (selectId === "editDocSelect" && docs.length) onEditDocSelected();
+  } catch (e) { console.error(e); }
+}
+
+/* Point 1: prefill the edit box with the real, current document text
+   instead of an empty "new content" field, so the user edits only what
+   they need to change. */
+async function onEditDocSelected() {
+  const select = document.getElementById("editDocSelect");
+  const statusEl = document.getElementById("editStatus");
+  const textarea = document.getElementById("editContent");
+  const docId = select.value;
+  if (!docId) { textarea.value = ""; return; }
+
+  textarea.value = "Loading current content…";
+  try {
+    const res = await authedFetch(`/documents/${docId}/content`);
+    const data = await res.json();
+    if (res.ok) {
+      textarea.value = data.content || "";
+      statusEl.className = "form-status info";
+      statusEl.innerText = "Loaded the current saved version — edit only what needs to change.";
+    } else {
+      textarea.value = "";
+      statusEl.className = "form-status err";
+      statusEl.innerText = "❌ " + (data.detail || "Could not load document content.");
+    }
+  } catch (e) {
+    textarea.value = "";
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ " + e.message;
+  }
+}
+
+async function submitAuthorizedEdit() {
+  const document_id = parseInt(document.getElementById("editDocSelect").value);
+  const authorization_key = document.getElementById("editAuthKey").value.trim();
+  const new_content = document.getElementById("editContent").value;
+  const statusEl = document.getElementById("editStatus");
+
+  if (!document_id || !authorization_key || !new_content) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "Select a document, enter the authorization key, and make sure there's content.";
+    return;
+  }
+  statusEl.className = "form-status info";
+  statusEl.innerText = "Verifying authorization…";
+
+  try {
+    const res = await authedFetch(`/documents/${document_id}/edit`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ authorization_key, new_content })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      statusEl.className = "form-status ok";
+      statusEl.innerText = "✅ Edit authorized and saved as v" + data.new_version + ".";
+      populateDocSelect("editDocSelect");
+      renderDocumentsTable();
+      if (currentRole === "owner") populateDocSelect("authDocSelect");
+    } else {
+      statusEl.className = "form-status err";
+      statusEl.innerText = "❌ " + (data.detail || "Edit denied.");
+    }
+  } catch (e) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ " + e.message;
+  }
+}
+
+/* ---------------------------------------------------------------- */
+/* Team & Access                                                       */
+/* ---------------------------------------------------------------- */
+
+async function createEmployee() {
+  const username = document.getElementById("newEmpUsername").value.trim();
+  const password = document.getElementById("newEmpPassword").value;
+  const statusEl = document.getElementById("employeeStatus");
+  if (!username || !password) {
+    statusEl.className = "form-status err"; statusEl.innerText = "Enter a username and password."; return;
+  }
+  statusEl.className = "form-status info"; statusEl.innerText = "Creating…";
+  try {
+    const res = await authedFetch("/admin/users", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json();
+    statusEl.className = res.ok ? "form-status ok" : "form-status err";
+    statusEl.innerText = (res.ok ? "✅ " : "❌ ") + (data.message || data.detail || JSON.stringify(data));
+    if (res.ok) { document.getElementById("newEmpUsername").value = ""; document.getElementById("newEmpPassword").value = ""; }
+  } catch (e) { statusEl.className = "form-status err"; statusEl.innerText = "❌ " + e.message; }
+}
+
+async function generateAuthKey() {
+  const document_id = parseInt(document.getElementById("authDocSelect").value);
+  const employee_username = document.getElementById("authEmployee").value.trim();
+  const expires_at = document.getElementById("authExpiry").value.trim() || null;
+  const maxUsesRaw = document.getElementById("authMaxUses").value.trim();
+  const max_uses = maxUsesRaw ? parseInt(maxUsesRaw) : null;
+  const statusEl = document.getElementById("authStatus");
+
+  if (!document_id || !employee_username) {
+    statusEl.className = "form-status err"; statusEl.innerText = "Select a document and enter an employee username."; return;
+  }
+  statusEl.className = "form-status info"; statusEl.innerText = "Generating…";
+
+  try {
+    const res = await authedFetch("/authorizations", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document_id, employee_username, permission: "EDIT", expires_at, max_uses })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      statusEl.className = "form-status ok";
+      statusEl.innerHTML = "";
+      const reveal = document.createElement("div");
+      reveal.className = "key-reveal";
+      reveal.innerHTML = `Key generated — shown once. Share it with <b>${escapeHtml(employee_username)}</b> securely.<code>${escapeHtml(data.authorization_key)}</code>`;
+      statusEl.appendChild(reveal);
+      refreshAuthorizations();
+    } else {
+      statusEl.className = "form-status err";
+      statusEl.innerText = "❌ " + (data.detail || "Could not generate key.");
+    }
+  } catch (e) { statusEl.className = "form-status err"; statusEl.innerText = "❌ " + e.message; }
+}
+
+async function refreshAuthorizations() {
+  const list = document.getElementById("authList");
+  try {
+    const res = await authedFetch("/authorizations");
+    const data = await res.json();
+    const active = (data.authorizations || []).filter(a => !a.revoked);
+    if (active.length === 0) { list.innerHTML = `<div class="empty-note">No active authorizations.</div>`; return; }
+    list.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Document</th><th>Employee</th><th>Expires</th><th>Uses</th><th></th></tr></thead>
+        <tbody>
+          ${active.map(a => `
+            <tr>
+              <td class="mono">${escapeHtml(a.document_key)}</td>
+              <td>${escapeHtml(a.employee_username)}</td>
+              <td class="mono">${a.expires_at ? escapeHtml(a.expires_at) : "—"}</td>
+              <td class="mono">${a.max_uses ? a.uses_count + "/" + a.max_uses : a.uses_count}</td>
+              <td><button class="btn btn-danger-ghost btn-sm" onclick="revokeAuth(${a.id})">Revoke</button></td>
+            </tr>`).join("")}
+        </tbody>
+      </table>`;
+  } catch (e) { list.innerHTML = `<div class="empty-note">Couldn't load authorizations.</div>`; }
+}
+
+async function revokeAuth(id) {
+  await authedFetch(`/authorizations/${id}/revoke`, { method: "POST" });
+  refreshAuthorizations();
+}
+
+/* ---------------------------------------------------------------- */
+/* Audit Log                                                            */
+/* ---------------------------------------------------------------- */
+
+let auditTab = "trail";
+
+function switchAuditTab(tab) {
+  auditTab = tab;
+  document.getElementById("tabAuditTrail").classList.toggle("active", tab === "trail");
+  document.getElementById("tabSecurityEvents").classList.toggle("active", tab === "security");
+  document.getElementById("auditTrailWrap").style.display = tab === "trail" ? "block" : "none";
+  document.getElementById("securityEventsWrap").style.display = tab === "security" ? "block" : "none";
+}
+
+function resultBadge(result) {
+  const map = { SUCCESS: "success", DENIED: "denied", BLOCKED: "blocked", TAMPERED: "tampered" };
+  const cls = map[result] || "warn";
+  return `<span class="badge ${cls}">${result}</span>`;
+}
+
+async function loadAuditView() {
+  const trailWrap = document.getElementById("auditTrailWrap");
+  const secWrap = document.getElementById("securityEventsWrap");
+
+  try {
+    const res = await authedFetch("/audit-logs");
+    const data = await res.json();
+    const rows = data.audit_log || [];
+    if (rows.length === 0) {
+      trailWrap.innerHTML = `<div class="empty-note">No audit events recorded yet.</div>`;
+    } else {
+      trailWrap.innerHTML = `
+        <table class="data-table">
+          <thead><tr><th>Time</th><th>Action</th><th>User</th><th>Target</th><th>Result</th><th>Details</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr>
+                <td class="mono">${formatTime(r.timestamp)}</td>
+                <td>${escapeHtml(r.action)}</td>
+                <td class="mono">${escapeHtml(r.username || "—")}</td>
+                <td class="mono">${escapeHtml(r.document_key || (r.document_id ? "doc #" + r.document_id : "—"))}</td>
+                <td>${resultBadge(r.result)}</td>
+                <td>${escapeHtml(r.details || "")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>`;
+    }
+  } catch (e) { trailWrap.innerHTML = `<div class="empty-note">Couldn't load the audit trail.</div>`; }
+
+  try {
+    const res = await authedFetch("/security-logs");
+    const data = await res.json();
+    const events = data.events || [];
+    if (events.length === 0) {
+      secWrap.innerHTML = `<div class="empty-note">No blocked security events.</div>`;
+    } else {
+      secWrap.innerHTML = `
+        <table class="data-table">
+          <thead><tr><th>Time</th><th>Event</th><th>Message</th></tr></thead>
+          <tbody>
+            ${events.slice().reverse().map(e => `
+              <tr>
+                <td class="mono">${formatTime(e.time)}</td>
+                <td><span class="badge blocked">${escapeHtml(e.event)}</span></td>
+                <td>${escapeHtml(e.message || "")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>`;
+    }
+  } catch (e) { secWrap.innerHTML = `<div class="empty-note">Couldn't load security events.</div>`; }
+}
+
+/* ---------------------------------------------------------------- */
+/* Utils                                                                */
+/* ---------------------------------------------------------------- */
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function formatTime(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch (e) { return iso; }
+}
+
+/* ---------------------------------------------------------------- */
+/* Boot                                                                 */
+/* ---------------------------------------------------------------- */
+
+if (token) {
+  enterApp();
+} else {
+  document.getElementById("loginScreen").style.display = "flex";
+}
+</script>
+</body>
+</html>

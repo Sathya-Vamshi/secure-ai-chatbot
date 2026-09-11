@@ -1,0 +1,36 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local database
+database/*.db
+database/*.sqlite
+database/*.sqlite3
+
+# Local application data
+storage/*
+backup/*
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Node dependencies
+node_modules/
