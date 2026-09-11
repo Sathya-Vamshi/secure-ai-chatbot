@@ -275,12 +275,38 @@
     margin-top: 2px;
   }
   .side-history-item {
-    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
     font-size: 12.5px;
     color: var(--ink-text-dim);
     line-height: 1.4;
     border-radius: var(--radius-sm);
+    cursor: pointer;
+    border: none;
+    background: transparent;
+    width: 100%;
+    text-align: left;
   }
+  .side-history-item:hover,
+  .side-history-item.active { background: var(--ink-3); color: #fff; }
+  .side-history-item .chat-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .side-history-item .chat-del {
+    opacity: 0;
+    border: none;
+    background: transparent;
+    color: var(--ink-text-dim);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0 2px;
+  }
+  .side-history-item:hover .chat-del { opacity: 1; color: #fff; }
 
   .sidebar-footer {
     border-top: 1px solid var(--ink-line);
@@ -758,6 +784,10 @@
     <button class="new-chat-btn" onclick="startNewChat()">
       <span class="ic">＋</span> New chat
     </button>
+    <div class="side-section-label">Your chats</div>
+    <div class="side-history scrollbar-thin" id="chatList">
+      <div class="side-history-item" style="cursor:default;">No chats yet</div>
+    </div>
 
     <button class="side-btn active" data-view="chat" onclick="setView('chat')"><span class="ic">💬</span> Chat</button>
     <button class="side-btn" data-view="documents" onclick="setView('documents')"><span class="ic">📄</span> Documents</button>
@@ -936,6 +966,7 @@ let token = localStorage.getItem("sac_token") || null;
 let currentRole = localStorage.getItem("sac_role") || null;
 let currentUsername = localStorage.getItem("sac_username") || null;
 let currentDocumentId = null;
+let currentConversationId = null;
 let chatLoaded = false;
 
 /* ---------------------------------------------------------------- */
@@ -1068,12 +1099,14 @@ async function submitPasswordReset() {
 
 function logout() {
   token = null; currentRole = null; currentUsername = null;
+  currentConversationId = null;
   localStorage.removeItem("sac_token");
   localStorage.removeItem("sac_role");
   localStorage.removeItem("sac_username");
   chatLoaded = false;
   document.getElementById("messages").innerHTML = "";
   document.getElementById("emptyChat").style.display = "block";
+  document.getElementById("chatList").innerHTML = `<div class="side-history-item" style="cursor:default;">No chats yet</div>`;
   document.getElementById("appShell").classList.remove("active");
   document.getElementById("loginScreen").style.display = "flex";
   showAuthPanel("login");
@@ -1095,7 +1128,7 @@ function enterApp() {
   document.getElementById("navAudit").style.display = currentRole === "owner" ? "flex" : "none";
 
   setView("chat");
-  loadChatHistory();
+  loadChatList();
   loadDocumentsView();
 }
 
@@ -1209,9 +1242,48 @@ function removeTypingIndicator() {
   if (el) el.remove();
 }
 
-async function loadChatHistory() {
+async function loadChatList() {
   try {
-    const res = await authedFetch("/chat/history");
+    const res = await authedFetch("/conversations");
+    const data = await res.json();
+    const chats = data.conversations || [];
+    const list = document.getElementById("chatList");
+    if (!chats.length) {
+      currentConversationId = null;
+      list.innerHTML = `<div class="side-history-item" style="cursor:default;">No chats yet</div>`;
+      document.getElementById("messages").innerHTML = "";
+      document.getElementById("emptyChat").style.display = "block";
+      chatLoaded = true;
+      return;
+    }
+    if (!currentConversationId || !chats.some(c => c.id === currentConversationId)) {
+      currentConversationId = chats[0].id;
+    }
+    list.innerHTML = chats.map(c => `
+      <div class="side-history-item ${c.id === currentConversationId ? "active" : ""}" onclick="openConversation(${c.id})">
+        <span class="chat-title">${escapeHtml(c.title || "New chat")}</span>
+        <button class="chat-del" title="Delete chat" onclick="event.stopPropagation(); deleteConversation(${c.id})">×</button>
+      </div>
+    `).join("");
+    await loadChatHistory();
+  } catch (e) { console.error(e); }
+}
+
+async function openConversation(id) {
+  currentConversationId = id;
+  setView("chat");
+  await loadChatList();
+}
+
+async function loadChatHistory() {
+  if (!currentConversationId) {
+    document.getElementById("messages").innerHTML = "";
+    document.getElementById("emptyChat").style.display = "block";
+    chatLoaded = true;
+    return;
+  }
+  try {
+    const res = await authedFetch("/conversations/" + currentConversationId);
     const data = await res.json();
     const history = data.history || [];
     document.getElementById("messages").innerHTML = "";
@@ -1228,10 +1300,21 @@ async function loadChatHistory() {
 }
 
 async function startNewChat() {
-  try { await authedFetch("/chat/history", { method: "DELETE" }); } catch (e) { /* ignore */ }
+  try {
+    const res = await authedFetch("/conversations", { method: "POST" });
+    const data = await res.json();
+    currentConversationId = data.id;
+  } catch (e) { currentConversationId = null; }
   document.getElementById("messages").innerHTML = "";
   document.getElementById("emptyChat").style.display = "block";
   setView("chat");
+  await loadChatList();
+}
+
+async function deleteConversation(id) {
+  try { await authedFetch("/conversations/" + id, { method: "DELETE" }); } catch (e) { /* ignore */ }
+  if (currentConversationId === id) currentConversationId = null;
+  await loadChatList();
 }
 
 async function sendMessage() {
@@ -1246,13 +1329,19 @@ async function sendMessage() {
   addTypingIndicator();
 
   try {
+    const payload = { message };
+    if (currentConversationId) payload.conversation_id = currentConversationId;
     const res = await authedFetch("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     removeTypingIndicator();
+
+    if (data.conversation_id) {
+      currentConversationId = data.conversation_id;
+    }
 
     const meta = [];
     if (data.model_used) meta.push(data.model_used);
@@ -1261,12 +1350,32 @@ async function sendMessage() {
 
     const isAlert = !!data.error || (data.message || "").startsWith("⚠️");
     addMessage(data.message || "(no response)", "bot", meta, isAlert);
+    loadChatListKeepMessages();
   } catch (e) {
     removeTypingIndicator();
     addMessage("Couldn't reach the backend: " + e.message, "bot", null, true);
   } finally {
     document.getElementById("sendBtn").disabled = false;
   }
+}
+
+async function loadChatListKeepMessages() {
+  try {
+    const res = await authedFetch("/conversations");
+    const data = await res.json();
+    const chats = data.conversations || [];
+    const list = document.getElementById("chatList");
+    if (!chats.length) {
+      list.innerHTML = `<div class="side-history-item" style="cursor:default;">No chats yet</div>`;
+      return;
+    }
+    list.innerHTML = chats.map(c => `
+      <div class="side-history-item ${c.id === currentConversationId ? "active" : ""}" onclick="openConversation(${c.id})">
+        <span class="chat-title">${escapeHtml(c.title || "New chat")}</span>
+        <button class="chat-del" title="Delete chat" onclick="event.stopPropagation(); deleteConversation(${c.id})">×</button>
+      </div>
+    `).join("");
+  } catch (e) { console.error(e); }
 }
 
 /* ---------------------------------------------------------------- */
@@ -1292,10 +1401,14 @@ async function refreshStats() {
     const docData = await docRes.json();
     document.getElementById("documentCount").innerText = docData.count ?? "–";
 
-    const logRes = await authedFetch("/security-logs");
-    const logData = await logRes.json();
-    const events = Array.isArray(logData) ? logData : (logData.events || []);
-    document.getElementById("attackCount").innerText = events.length;
+    if (currentRole === "owner") {
+      const logRes = await authedFetch("/security-logs");
+      const logData = await logRes.json();
+      const events = Array.isArray(logData) ? logData : (logData.events || []);
+      document.getElementById("attackCount").innerText = events.length;
+    } else {
+      document.getElementById("attackCount").innerText = "—";
+    }
   } catch (e) { console.error(e); }
 }
 

@@ -21,7 +21,7 @@ from datetime import datetime
 
 from backend.database import get_connection
 from backend.security import calculate_hash, create_backup
-from backend.authorization import write_audit
+from backend.authorization import write_audit, has_authorization_for
 
 
 def _row_to_dict(row):
@@ -43,6 +43,29 @@ _SELECT_COLS = """
     document_key, version, parent_document_id, created_by, owner_username,
     authorization_id
 """
+
+
+def sanitize_username(username: str) -> str:
+    cleaned = "".join(c for c in (username or "") if c.isalnum() or c in "-_.")
+    return cleaned or "unknown"
+
+
+def make_document_key(owner: str, filename: str) -> str:
+    return f"{owner}::{filename}"
+
+
+def user_storage_dir(username: str) -> str:
+    path = os.path.join("storage", sanitize_username(username))
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def user_can_access_document(doc: dict, username: str) -> bool:
+    if not doc or not username:
+        return False
+    if doc.get("owner_username") == username or doc.get("created_by") == username:
+        return True
+    return has_authorization_for(doc.get("document_key"), username)
 
 
 def get_document(document_id: int):
@@ -81,12 +104,21 @@ def list_document_versions(document_key: str):
     return [_row_to_dict(r) for r in rows]
 
 
-def list_documents_grouped():
-    """One entry per document family, showing its current active
-    version. Used to populate the owner's 'select document' dropdown."""
+def list_documents_grouped(username: str):
+    """One entry per document family this user is allowed to see:
+    documents they uploaded, plus documents they were given an edit key for."""
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute("SELECT DISTINCT document_key FROM documents")
+    cursor.execute(
+        """
+        SELECT DISTINCT document_key FROM documents
+        WHERE owner_username = ? OR created_by = ?
+        UNION
+        SELECT DISTINCT document_key FROM authorizations
+        WHERE employee_username = ? AND revoked = 0
+        """,
+        (username, username, username),
+    )
     keys = [r[0] for r in cursor.fetchall()]
     connection.close()
     return [get_active_version(k) for k in keys if get_active_version(k)]
@@ -164,23 +196,23 @@ def _set_status(document_id: int, status: str) -> None:
     connection.close()
 
 
-def resolve_active_document() -> dict:
-    """What /chat actually calls. Finds the most recently touched
-    document family, verifies its active version's integrity, and only
-    returns text if that check passes. Falls back to storage/test.txt
-    (unverified, matches old demo behavior) if nothing has ever been
-    uploaded."""
+def resolve_active_document(username: str) -> dict:
+    """What /chat actually calls. Uses this account's most recently
+    uploaded document only — never another user's files."""
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute("SELECT document_key FROM documents ORDER BY id DESC LIMIT 1")
+    cursor.execute(
+        """
+        SELECT document_key FROM documents
+        WHERE owner_username = ? OR created_by = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (username, username),
+    )
     row = cursor.fetchone()
     connection.close()
 
     if row is None:
-        fallback = "storage/test.txt"
-        if os.path.exists(fallback):
-            with open(fallback, "r", encoding="utf-8", errors="ignore") as f:
-                return {"ok": True, "text": f.read(), "document_id": None, "status": "UNVERIFIED_DEMO"}
         return {"ok": False, "status": "NO_DOCUMENT", "message": "No document has been uploaded yet."}
 
     active = get_active_version(row[0])
@@ -207,9 +239,13 @@ def create_document_version(document_key: str, new_text: str, created_by: str,
         raise ValueError(f"No existing document found for '{document_key}'")
 
     next_version = current["version"] + 1
-    base, ext = os.path.splitext(document_key)
+    display_name = current["filename"]
+    if "::" in document_key:
+        display_name = document_key.split("::", 1)[1]
+    base, ext = os.path.splitext(os.path.basename(display_name))
     new_filename = f"{base}__v{next_version}{ext}"
-    new_filepath = os.path.join("storage", new_filename)
+    owner = current.get("owner_username") or created_by
+    new_filepath = os.path.join(user_storage_dir(owner), new_filename)
 
     with open(new_filepath, "w", encoding="utf-8") as f:
         f.write(new_text)

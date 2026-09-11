@@ -131,23 +131,43 @@ def create_authorization(document_key: str, employee_username: str, created_by: 
     return authorization_id, raw_key
 
 
-def list_authorizations(document_key: str = None) -> list[dict]:
-    """Never returns key_hash — the whole point of hashing it is that it
-    doesn't leave the database, including via this API."""
+def has_authorization_for(document_key: str, employee_username: str) -> bool:
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        SELECT id FROM authorizations
+        WHERE document_key = ? AND employee_username = ? AND revoked = 0
+        LIMIT 1
+        """,
+        (document_key, employee_username),
+    )
+    row = cursor.fetchone()
+    connection.close()
+    return row is not None
+
+
+def list_authorizations(username: str, document_key: str = None) -> list[dict]:
+    """Never returns key_hash. Only keys this user created or received."""
     connection = get_connection()
     cursor = connection.cursor()
     if document_key:
         cursor.execute("""
             SELECT id, document_key, employee_username, permission, created_by,
                    created_at, expires_at, max_uses, uses_count, revoked
-            FROM authorizations WHERE document_key = ? ORDER BY id DESC
-        """, (document_key,))
+            FROM authorizations
+            WHERE document_key = ?
+              AND (created_by = ? OR employee_username = ?)
+            ORDER BY id DESC
+        """, (document_key, username, username))
     else:
         cursor.execute("""
             SELECT id, document_key, employee_username, permission, created_by,
                    created_at, expires_at, max_uses, uses_count, revoked
-            FROM authorizations ORDER BY id DESC
-        """)
+            FROM authorizations
+            WHERE created_by = ? OR employee_username = ?
+            ORDER BY id DESC
+        """, (username, username))
     rows = cursor.fetchall()
     connection.close()
     cols = ["id", "document_key", "employee_username", "permission", "created_by",
@@ -158,9 +178,15 @@ def list_authorizations(document_key: str = None) -> list[dict]:
 def revoke_authorization(authorization_id: int, revoked_by: str) -> bool:
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute("SELECT document_key FROM authorizations WHERE id = ?", (authorization_id,))
+    cursor.execute(
+        "SELECT document_key, created_by, employee_username FROM authorizations WHERE id = ?",
+        (authorization_id,),
+    )
     row = cursor.fetchone()
     if row is None:
+        connection.close()
+        return False
+    if revoked_by not in (row[1], row[2]) and not row[0].startswith(f"{revoked_by}::"):
         connection.close()
         return False
     cursor.execute("UPDATE authorizations SET revoked = 1 WHERE id = ?", (authorization_id,))

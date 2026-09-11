@@ -34,13 +34,16 @@ def calculate_hash(filepath):
 
 
 def create_backup(filepath):
-    """Create trusted backup of uploaded file."""
+    """Create trusted backup of uploaded file, preserving per-user folders
+    so two accounts never overwrite each other's backups."""
 
-    os.makedirs("backup", exist_ok=True)
+    if os.path.normpath(filepath).startswith(os.path.normpath("storage") + os.sep):
+        rel = os.path.relpath(filepath, "storage")
+    else:
+        rel = os.path.basename(filepath)
 
-    filename = os.path.basename(filepath)
-    backup_path = os.path.join("backup", filename)
-
+    backup_path = os.path.join("backup", rel)
+    os.makedirs(os.path.dirname(backup_path) or "backup", exist_ok=True)
     shutil.copy2(filepath, backup_path)
 
     return backup_path

@@ -20,7 +20,9 @@ from backend.auth import (
 from backend.security import calculate_hash, create_backup
 from backend.database import (
     create_database, get_connection, add_chat_message,
-    get_chat_history, clear_chat_history,
+    get_chat_history, clear_chat_history, create_conversation,
+    list_conversations, get_conversation, delete_conversation,
+    count_user_documents,
 )
 from backend.rag import (
     is_stats_question,
@@ -40,7 +42,8 @@ from backend.authorization import (
 from backend.versioning import (
     get_document, get_active_version, list_document_versions,
     list_documents_grouped, verify_document_integrity, resolve_active_document,
-    create_document_version,
+    create_document_version, make_document_key, user_storage_dir,
+    user_can_access_document,
 )
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 
@@ -137,14 +140,23 @@ def health():
     return {"status": "healthy"}
 
 
+def require_document_access(document_id: int, username: str) -> dict:
+    doc = get_document(document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not user_can_access_document(doc, username):
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
+
+
 @app.post("/upload")
 def upload_document(
     file: UploadFile = File(...),
     current_user: str = Depends(get_current_user)
 ):
 
-    # Save uploaded file
-    filepath = os.path.join("storage", file.filename)
+    user_dir = user_storage_dir(current_user)
+    filepath = os.path.join(user_dir, file.filename)
 
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -155,7 +167,7 @@ def upload_document(
     # Create trusted backup
     backup_path = create_backup(filepath)
 
-    document_key = file.filename
+    document_key = make_document_key(current_user, file.filename)
 
     # If a document with this name already has versions, this fresh
     # upload becomes the new baseline: supersede the old active version
@@ -218,6 +230,7 @@ def upload_document(
 
 class ChatRequest(BaseModel):
     message: str
+    conversation_id: Optional[int] = None
 
 def detect_prompt_injection(text: str):
     suspicious_patterns = [
@@ -340,22 +353,30 @@ def call_ollama(model: str, prompt: str, num_predict: int = FAST_NUM_PREDICT) ->
     return result.get("response", "").strip()
 
 
-def _save_and_reply(current_user: str, user_message: str, bot_message: str, **extra) -> dict:
+def _save_and_reply(current_user: str, conversation_id: int, user_message: str, bot_message: str, **extra) -> dict:
     """Every /chat reply passes through here: persists the exchange to
-    chat_history (so the frontend can show a real, reloadable chat
-    history like a normal chat app) and shapes the response payload.
+    this user's conversation only and shapes the response payload.
     Persistence is best-effort — a DB hiccup should never break the
     chat response itself."""
     try:
-        add_chat_message(current_user, "user", user_message)
-        add_chat_message(current_user, "bot", bot_message)
+        add_chat_message(current_user, "user", user_message, conversation_id)
+        add_chat_message(current_user, "bot", bot_message, conversation_id)
     except Exception:
         pass
-    return {"message": bot_message, **extra}
+    return {"message": bot_message, "conversation_id": conversation_id, **extra}
 
 
 @app.post("/chat")
 def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
+
+    if request.conversation_id is None:
+        conversation = create_conversation(current_user)
+        conversation_id = conversation["id"]
+    else:
+        conversation = get_conversation(request.conversation_id, current_user)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        conversation_id = conversation["id"]
 
     # Check for prompt injection
     if detect_prompt_injection(request.message):
@@ -366,7 +387,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         )
         bot_message = "⚠️ Security alert: Potential prompt injection detected. Request blocked."
         return _save_and_reply(
-            current_user, request.message, bot_message,
+            current_user, conversation_id, request.message, bot_message,
             model_used=None, response_time_seconds=0.0,
         )
 
@@ -374,16 +395,12 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
     canned = trivial_reply(request.message)
     if canned is not None:
         return _save_and_reply(
-            current_user, request.message, canned,
+            current_user, conversation_id, request.message, canned,
             model_used="canned-response (no LLM call)", response_time_seconds=0.0,
         )
 
-    # --- Integrity gate: verify the active document's hash BEFORE any
-    # content from it reaches stats, cache, RAG, or the LLM. A tampered
-    # (or missing) document is blocked right here — this is the one case
-    # that still stops the conversation, since it's a security signal,
-    # not just "no document yet".
-    resolved = resolve_active_document()
+    # --- Integrity gate: verify THIS USER's active document only.
+    resolved = resolve_active_document(current_user)
     has_document = False
     document = ""
 
@@ -395,7 +412,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         # uploaded yet". Block and log it.
         log_security_event(resolved["status"], resolved["message"])
         return _save_and_reply(
-            current_user, request.message, resolved["message"],
+            current_user, conversation_id, request.message, resolved["message"],
             model_used=None, response_time_seconds=0.0,
         )
     # else: NO_DOCUMENT just means nothing has been uploaded — that's not
@@ -413,18 +430,18 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         else:
             bot_message = answer_stats_question(request.message, document)
         return _save_and_reply(
-            current_user, request.message, bot_message,
+            current_user, conversation_id, request.message, bot_message,
             model_used="stats-engine (no LLM call)", response_time_seconds=0.0,
         )
 
     # --- Cache: identical question asked twice about the same document --
-    cache_key = (hash(document), request.message.strip().lower())
+    cache_key = (current_user, hash(document), request.message.strip().lower())
     if cache_key in _chat_cache:
         cached = dict(_chat_cache[cache_key])
         cached["cached"] = True
         cached["response_time_seconds"] = 0.0  # this call itself was instant
         return _save_and_reply(
-            current_user, request.message, cached["message"],
+            current_user, conversation_id, request.message, cached["message"],
             **{k: v for k, v in cached.items() if k != "message"},
         )
 
@@ -449,14 +466,14 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
     except requests.exceptions.Timeout:
         bot_message = f"The AI model ({model}) took too long to respond. Try a shorter/more specific question, or check that 'ollama serve' is running."
         return _save_and_reply(
-            current_user, request.message, bot_message,
+            current_user, conversation_id, request.message, bot_message,
             model_used=model, error="timeout",
         )
 
     except requests.exceptions.RequestException as exc:
         bot_message = f"AI model request failed: {str(exc)}"
         return _save_and_reply(
-            current_user, request.message, bot_message,
+            current_user, conversation_id, request.message, bot_message,
             model_used=model, error="request_failed",
         )
 
@@ -482,22 +499,70 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
     # document is instant next time.
     _chat_cache[cache_key] = {"message": answer, **extra}
 
-    return _save_and_reply(current_user, request.message, answer, **extra)
+    return _save_and_reply(current_user, conversation_id, request.message, answer, **extra)
+
+
+@app.get("/conversations")
+def list_conversations_endpoint(current_user: str = Depends(get_current_user)):
+    return {"conversations": list_conversations(current_user)}
+
+
+@app.post("/conversations")
+def create_conversation_endpoint(current_user: str = Depends(get_current_user)):
+    return create_conversation(current_user)
+
+
+@app.get("/conversations/{conversation_id}")
+def get_conversation_messages(
+    conversation_id: int,
+    current_user: str = Depends(get_current_user),
+):
+    conversation = get_conversation(conversation_id, current_user)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {
+        "conversation": conversation,
+        "history": get_chat_history(current_user, conversation_id),
+    }
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation_endpoint(
+    conversation_id: int,
+    current_user: str = Depends(get_current_user),
+):
+    if not delete_conversation(conversation_id, current_user):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"message": "Conversation deleted."}
 
 
 @app.get("/chat/history")
-def get_chat_history_endpoint(current_user: str = Depends(get_current_user)):
-    """Full transcript for the logged-in user, oldest first — lets the
-    frontend restore the chat exactly as it was on reload, like a normal
-    chat app."""
-    return {"history": get_chat_history(current_user)}
+def get_chat_history_endpoint(
+    conversation_id: Optional[int] = None,
+    current_user: str = Depends(get_current_user),
+):
+    """Transcript for one of this user's conversations."""
+    conversations = list_conversations(current_user)
+    if conversation_id is None:
+        if not conversations:
+            return {"history": [], "conversation_id": None}
+        conversation_id = conversations[0]["id"]
+    conversation = get_conversation(conversation_id, current_user)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {
+        "conversation_id": conversation_id,
+        "history": get_chat_history(current_user, conversation_id),
+    }
 
 
 @app.delete("/chat/history")
-def clear_chat_history_endpoint(current_user: str = Depends(get_current_user)):
-    """'New chat' — wipes this user's own stored transcript. Doesn't
-    touch anyone else's history."""
-    clear_chat_history(current_user)
+def clear_chat_history_endpoint(
+    conversation_id: Optional[int] = None,
+    current_user: str = Depends(get_current_user),
+):
+    """Deletes one conversation, or all of this user's chats."""
+    clear_chat_history(current_user, conversation_id)
     return {"message": "Chat history cleared."}
 
 
@@ -515,10 +580,7 @@ def check_integrity(
     document_id: int,
     current_user: str = Depends(get_current_user)
 ):
-    doc = get_document(document_id)
-
-    if doc is None:
-        return {"error": "Document not found"}
+    doc = require_document_access(document_id, current_user)
 
     result = verify_document_integrity(document_id)
 
@@ -554,6 +616,8 @@ def restore_document(
     document_id: int,
     current_user: str = Depends(get_current_user)
 ):
+
+    require_document_access(document_id, current_user)
 
     connection = get_connection()
     cursor = connection.cursor()
@@ -621,20 +685,8 @@ def get_security_logs(
     }
 
 @app.get("/documents/count")
-def document_count():
-
-    connection = get_connection()
-    cursor = connection.cursor()
-
-    cursor.execute("SELECT COUNT(*) FROM documents")
-
-    count = cursor.fetchone()[0]
-
-    connection.close()
-
-    return {
-        "count": count
-    }
+def document_count(current_user: str = Depends(get_current_user)):
+    return {"count": count_user_documents(current_user)}
 
 # ===========================================================================
 # Authorized document modification / authentication key feature
@@ -686,12 +738,13 @@ def list_employee_users(owner=Depends(require_owner)):
 
 @app.get("/documents")
 def list_documents(current_user: str = Depends(get_current_user)):
-    return {"documents": list_documents_grouped()}
+    return {"documents": list_documents_grouped(current_user)}
 
 
 @app.get("/documents/{document_key}/versions")
 def document_versions(document_key: str, current_user: str = Depends(get_current_user)):
     versions = list_document_versions(document_key)
+    versions = [v for v in versions if user_can_access_document(v, current_user)]
     if not versions:
         raise HTTPException(status_code=404, detail="No such document.")
     return {"document_key": document_key, "versions": versions}
@@ -708,8 +761,13 @@ def generate_authorization(
     user_info=Depends(get_current_user_info),
 ):
     doc = get_document(request.document_id)
-    if doc is None:
+    if doc is None or not user_can_access_document(doc, user_info["username"]):
         raise HTTPException(status_code=404, detail="Document not found.")
+    if doc.get("owner_username") != user_info["username"] and doc.get("created_by") != user_info["username"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the document owner can issue authorization keys.",
+        )
 
     if request.permission != "EDIT":
         raise HTTPException(status_code=400, detail="Only the 'EDIT' permission is currently supported.")
@@ -743,7 +801,7 @@ def generate_authorization(
 
 @app.get("/authorizations")
 def get_authorizations(document_key: Optional[str] = None, user_info=Depends(get_current_user_info)):
-    return {"authorizations": list_authorizations(document_key)}
+    return {"authorizations": list_authorizations(user_info["username"], document_key)}
 
 
 @app.post("/authorizations/{authorization_id}/revoke")
@@ -775,9 +833,7 @@ def edit_document(
             detail="Too many failed authorization attempts. Please try again later.",
         )
 
-    doc = get_document(document_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found.")
+    doc = require_document_access(document_id, current_user)
 
     document_key = doc["document_key"]
 
@@ -822,9 +878,7 @@ def edit_document(
 @app.get("/documents/{document_id}/content")
 def get_document_content(document_id: int, current_user: str = Depends(get_current_user)):
     """Return the full text of a document version for editing purposes."""
-    doc = get_document(document_id)
-    if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+    doc = require_document_access(document_id, current_user)
     if not os.path.exists(doc["filepath"]):
         raise HTTPException(status_code=404, detail="Document file missing")
     with open(doc["filepath"], "r", encoding="utf-8", errors="ignore") as f:
