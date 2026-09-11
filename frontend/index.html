@@ -647,7 +647,7 @@
 <!-- LOGIN SCREEN                                                   -->
 <!-- ============================================================ -->
 <div id="loginScreen">
-  <div class="login-card">
+  <div class="login-card" id="loginCard">
     <div class="brand-mark">
       <div class="brand-glyph">V</div>
       <div class="brand-name">Verity</div>
@@ -662,14 +662,84 @@
       </div>
       <div class="field">
         <label for="password">Password</label>
-        <input type="password" id="password" value="admin123" autocomplete="current-password">
+        <input type="password" id="password" value="admin_123" autocomplete="current-password">
       </div>
       <button class="btn btn-primary btn-block" onclick="login()" type="submit">Sign in</button>
       <div id="loginStatus" class="form-status"></div>
     </form>
 
+    <div class="login-hint" style="display:flex; justify-content:space-between; gap:12px;">
+      <a href="#" onclick="showAuthPanel('signup'); return false;">Create an account</a>
+      <a href="#" onclick="showAuthPanel('forgot'); return false;">Forgot password?</a>
+    </div>
+
     <div class="login-hint">
-      Demo owner account — username <code>admin</code>, password <code>admin123</code>.
+      Owner account — username <code>admin</code>, password <code>admin_123</code>.
+    </div>
+  </div>
+
+  <!-- -------------------- Sign up -------------------- -->
+  <div class="login-card" id="signupCard" style="display:none;">
+    <div class="brand-mark">
+      <div class="brand-glyph">V</div>
+      <div class="brand-name">Verity</div>
+    </div>
+    <h1>Create an account</h1>
+    <p class="lede">Every account gets its own documents, chat history and authorization keys.</p>
+
+    <form id="signupForm" onsubmit="return false;">
+      <div class="field">
+        <label for="signupUsername">Username</label>
+        <input type="text" id="signupUsername" autocomplete="username">
+      </div>
+      <div class="field">
+        <label for="signupEmail">Email</label>
+        <input type="text" id="signupEmail" autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="signupPassword">Password</label>
+        <input type="password" id="signupPassword" autocomplete="new-password" placeholder="At least 6 characters">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="signup()" type="submit">Create account</button>
+      <div id="signupStatus" class="form-status"></div>
+    </form>
+
+    <div class="login-hint">
+      <a href="#" onclick="showAuthPanel('login'); return false;">Back to sign in</a>
+    </div>
+  </div>
+
+  <!-- -------------------- Forgot password -------------------- -->
+  <div class="login-card" id="forgotCard" style="display:none;">
+    <div class="brand-mark">
+      <div class="brand-glyph">V</div>
+      <div class="brand-name">Verity</div>
+    </div>
+    <h1>Reset password</h1>
+    <p class="lede">We'll email a 6-digit code to your account's address.</p>
+
+    <form id="forgotForm" onsubmit="return false;">
+      <div class="field">
+        <label for="forgotEmail">Email</label>
+        <input type="text" id="forgotEmail" autocomplete="email">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="requestResetCode()" type="submit">Send code</button>
+      <div id="forgotStatus" class="form-status"></div>
+
+      <div class="field" style="margin-top:14px;">
+        <label for="resetCode">Reset code</label>
+        <input type="text" id="resetCode" placeholder="6-digit code">
+      </div>
+      <div class="field">
+        <label for="resetNewPassword">New password</label>
+        <input type="password" id="resetNewPassword" placeholder="At least 6 characters">
+      </div>
+      <button class="btn btn-primary btn-block" onclick="submitPasswordReset()" type="submit">Reset password</button>
+      <div id="resetStatus" class="form-status"></div>
+    </form>
+
+    <div class="login-hint">
+      <a href="#" onclick="showAuthPanel('login'); return false;">Back to sign in</a>
     </div>
   </div>
 </div>
@@ -789,15 +859,16 @@
       </div>
     </section>
 
-    <!-- ---------------- TEAM & ACCESS VIEW (owner) ---------------- -->
+    <!-- ---------------- TEAM & ACCESS VIEW (all logged-in users; ---------------- -->
+    <!-- ---------------- "Create employee account" panel is owner-only within it) ---------------- -->
     <section class="view" id="view-team">
       <div class="topbar"><h2>Team &amp; Access</h2></div>
       <div class="content-scroll scrollbar-thin">
         <div class="content-col">
           <div class="panel-row">
-            <div class="panel">
+            <div class="panel" id="createEmployeePanel" style="display:none;">
               <h3>Create employee account</h3>
-              <p class="panel-sub">Employees can edit a document only with a key you generate for that specific document.</p>
+              <p class="panel-sub">Anyone can also self-signup from the login screen — this is just a shortcut for the owner.</p>
               <label class="field-label">Username</label>
               <input type="text" id="newEmpUsername" placeholder="e.g. rahul">
               <label class="field-label">Temporary password</label>
@@ -908,6 +979,93 @@ async function login() {
   }
 }
 
+function showAuthPanel(panel) {
+  document.getElementById("loginScreen").querySelectorAll(".login-card").forEach(c => c.style.display = "none");
+  const idToShow = panel === "signup" ? "signupCard" : panel === "forgot" ? "forgotCard" : "loginCard";
+  document.getElementById(idToShow).style.display = "block";
+}
+
+async function signup() {
+  const username = document.getElementById("signupUsername").value.trim();
+  const email = document.getElementById("signupEmail").value.trim();
+  const password = document.getElementById("signupPassword").value;
+  const statusEl = document.getElementById("signupStatus");
+
+  if (!username || !email || !password) {
+    statusEl.className = "form-status err"; statusEl.innerText = "Fill in username, email and password."; return;
+  }
+  statusEl.className = "form-status info"; statusEl.innerText = "Creating account…";
+
+  try {
+    const res = await fetch(`${API}/signup`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, email, password })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      statusEl.className = "form-status ok";
+      statusEl.innerText = "✅ Account created. You can sign in now.";
+      document.getElementById("username").value = username;
+      document.getElementById("password").value = "";
+      setTimeout(() => showAuthPanel("login"), 900);
+    } else {
+      statusEl.className = "form-status err";
+      statusEl.innerText = "❌ " + (data.detail || "Could not create account.");
+    }
+  } catch (e) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ Could not reach the backend. Is uvicorn running on " + API + "?";
+  }
+}
+
+async function requestResetCode() {
+  const email = document.getElementById("forgotEmail").value.trim();
+  const statusEl = document.getElementById("forgotStatus");
+  if (!email) { statusEl.className = "form-status err"; statusEl.innerText = "Enter your email."; return; }
+  statusEl.className = "form-status info"; statusEl.innerText = "Sending code…";
+  try {
+    const res = await fetch(`${API}/forgot-password`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+    statusEl.className = res.ok ? "form-status ok" : "form-status err";
+    statusEl.innerText = (res.ok ? "✅ " : "❌ ") + (data.message || data.detail || "Something went wrong.");
+  } catch (e) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ Could not reach the backend. Is uvicorn running on " + API + "?";
+  }
+}
+
+async function submitPasswordReset() {
+  const email = document.getElementById("forgotEmail").value.trim();
+  const code = document.getElementById("resetCode").value.trim();
+  const new_password = document.getElementById("resetNewPassword").value;
+  const statusEl = document.getElementById("resetStatus");
+  if (!email || !code || !new_password) {
+    statusEl.className = "form-status err"; statusEl.innerText = "Enter your email, the code, and a new password."; return;
+  }
+  statusEl.className = "form-status info"; statusEl.innerText = "Resetting…";
+  try {
+    const res = await fetch(`${API}/reset-password`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, code, new_password })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      statusEl.className = "form-status ok";
+      statusEl.innerText = "✅ Password updated. You can sign in now.";
+      setTimeout(() => showAuthPanel("login"), 900);
+    } else {
+      statusEl.className = "form-status err";
+      statusEl.innerText = "❌ " + (data.detail || "Could not reset password.");
+    }
+  } catch (e) {
+    statusEl.className = "form-status err";
+    statusEl.innerText = "❌ Could not reach the backend. Is uvicorn running on " + API + "?";
+  }
+}
+
 function logout() {
   token = null; currentRole = null; currentUsername = null;
   localStorage.removeItem("sac_token");
@@ -918,6 +1076,7 @@ function logout() {
   document.getElementById("emptyChat").style.display = "block";
   document.getElementById("appShell").classList.remove("active");
   document.getElementById("loginScreen").style.display = "flex";
+  showAuthPanel("login");
 }
 
 function enterApp() {
@@ -926,7 +1085,13 @@ function enterApp() {
   document.getElementById("whoami").innerText = currentUsername || "—";
   document.getElementById("whorole").innerText = currentRole || "—";
   document.getElementById("userAvatar").innerText = (currentUsername || "?").slice(0, 1);
-  document.getElementById("navTeam").style.display = currentRole === "owner" ? "flex" : "none";
+  // Team & Access (generating authorization keys) is available to every
+  // logged-in user, not just the owner — that's what lets an employee
+  // create a key for another employee. Only the "create employee
+  // account" shortcut and the Audit Log / Security Logs view stay
+  // owner-only.
+  document.getElementById("navTeam").style.display = "flex";
+  document.getElementById("createEmployeePanel").style.display = currentRole === "owner" ? "block" : "none";
   document.getElementById("navAudit").style.display = currentRole === "owner" ? "flex" : "none";
 
   setView("chat");
@@ -955,7 +1120,7 @@ function setView(name) {
   document.querySelectorAll(".side-btn").forEach(b => b.classList.toggle("active", b.dataset.view === name));
 
   if (name === "documents") loadDocumentsView();
-  if (name === "team" && currentRole === "owner") { populateDocSelect("authDocSelect"); refreshAuthorizations(); }
+  if (name === "team") { populateDocSelect("authDocSelect"); refreshAuthorizations(); }
   if (name === "audit" && currentRole === "owner") loadAuditView();
 }
 
@@ -1309,7 +1474,7 @@ async function submitAuthorizedEdit() {
       statusEl.innerText = "✅ Edit authorized and saved as v" + data.new_version + ".";
       populateDocSelect("editDocSelect");
       renderDocumentsTable();
-      if (currentRole === "owner") populateDocSelect("authDocSelect");
+      populateDocSelect("authDocSelect");
     } else {
       statusEl.className = "form-status err";
       statusEl.innerText = "❌ " + (data.detail || "Edit denied.");

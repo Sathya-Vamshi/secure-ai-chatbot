@@ -62,8 +62,10 @@ def create_database():
     )
 
     # --- users -----------------------------------------------------
-    # 'owner' = document owner/administrator, can generate authorization
-    # keys. 'employee' = can only edit a document with a valid key.
+    # 'owner' = the single fixed admin/admin_123 account, sees the
+    # Security Logs view. 'employee' = every self-signed-up user; can
+    # edit a document with a valid key, and can generate authorization
+    # keys for other employees too.
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +73,34 @@ def create_database():
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL,
         created_at TEXT NOT NULL
+    )
+    """)
+
+    # email is added as a nullable column (rather than in the CREATE
+    # TABLE above) so this stays safe to run against a database created
+    # by an older version of this project that has no email column yet.
+    _ensure_column(cursor, "users", "email", "TEXT")
+
+    # Case-insensitive-ish uniqueness for email, but only enforced for
+    # rows that actually have one set — the seeded 'admin' owner account
+    # has no email and shouldn't block anything.
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email "
+        "ON users(email) WHERE email IS NOT NULL"
+    )
+
+    # --- password reset codes -----------------------------------------
+    # Used by the forgot-password flow. Only a hash of the one-time code
+    # is stored (never the raw code) — same pattern as authorization
+    # keys below. A row is single-use and short-lived.
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS password_reset_codes(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0
     )
     """)
 

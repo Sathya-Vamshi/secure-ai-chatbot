@@ -15,7 +15,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from backend.auth import (
     verify_password, create_token, verify_token, oauth2_scheme,
     seed_default_admin, get_user, user_exists, create_user, list_users,
-    hash_password,
+    hash_password, signup_user, request_password_reset, reset_password_with_code,
 )
 from backend.security import calculate_hash, create_backup
 from backend.database import (
@@ -597,7 +597,7 @@ def restore_document(
     }
 @app.get("/security-logs")
 def get_security_logs(
-    current_user: str = Depends(get_current_user)
+    owner=Depends(require_owner)
 ):
 
     if not os.path.exists("security.log"):
@@ -697,12 +697,15 @@ def document_versions(document_key: str, current_user: str = Depends(get_current
     return {"document_key": document_key, "versions": versions}
 
 
-# --- Owner/admin: generate & manage authorization keys ---------------------
+# --- Generate & manage authorization keys -----------------------------
+# Any logged-in user (owner OR employee) can generate a key for another
+# employee — not just the owner. This is what lets Employee A hand
+# Employee B a key to edit a document.
 
 @app.post("/authorizations")
 def generate_authorization(
     request: CreateAuthorizationRequest,
-    owner=Depends(require_owner),
+    user_info=Depends(get_current_user_info),
 ):
     doc = get_document(request.document_id)
     if doc is None:
@@ -714,13 +717,13 @@ def generate_authorization(
     if not user_exists(request.employee_username):
         raise HTTPException(
             status_code=400,
-            detail=f"No employee account named '{request.employee_username}'. Create one first via /admin/users.",
+            detail=f"No account named '{request.employee_username}'. That person needs to sign up first.",
         )
 
     authorization_id, raw_key = create_authorization(
         document_key=doc["document_key"],
         employee_username=request.employee_username,
-        created_by=owner["username"],
+        created_by=user_info["username"],
         permission=request.permission,
         expires_at=request.expires_at,
         max_uses=request.max_uses,
@@ -739,13 +742,13 @@ def generate_authorization(
 
 
 @app.get("/authorizations")
-def get_authorizations(document_key: Optional[str] = None, owner=Depends(require_owner)):
+def get_authorizations(document_key: Optional[str] = None, user_info=Depends(get_current_user_info)):
     return {"authorizations": list_authorizations(document_key)}
 
 
 @app.post("/authorizations/{authorization_id}/revoke")
-def revoke_authorization_endpoint(authorization_id: int, owner=Depends(require_owner)):
-    if not revoke_authorization(authorization_id, revoked_by=owner["username"]):
+def revoke_authorization_endpoint(authorization_id: int, user_info=Depends(get_current_user_info)):
+    if not revoke_authorization(authorization_id, revoked_by=user_info["username"]):
         raise HTTPException(status_code=404, detail="Authorization not found.")
     return {"message": "Authorization revoked.", "authorization_id": authorization_id}
 
@@ -835,6 +838,59 @@ def edit_page():
     # Resolve absolute path to the frontend/edit.html file
     frontend_path = os.path.join(os.path.dirname(__file__), "..", "frontend", "edit.html")
     return FileResponse(frontend_path)
+
+
+class SignupRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
+
+
+@app.post("/signup")
+def signup(request: SignupRequest):
+    """Self-service account creation. Every new account is role='employee'
+    — the only 'owner' account is the fixed admin/admin_123 login, which
+    is the one account that can see Security Logs."""
+    try:
+        signup_user(request.username, request.email, request.password)
+    except ValueError as e:
+        write_audit(
+            "SIGNUP_FAILED", username=request.username, result="DENIED",
+            details=str(e),
+        )
+        raise HTTPException(status_code=400, detail=str(e))
+
+    write_audit("SIGNUP_SUCCESS", username=request.username, result="SUCCESS")
+    return {"message": "Account created. You can now sign in.", "username": request.username, "role": "employee"}
+
+
+@app.post("/forgot-password")
+def forgot_password(request: ForgotPasswordRequest):
+    """Always returns the same generic message, whether or not the email
+    is registered, so this endpoint can't be used to check which emails
+    have accounts."""
+    request_password_reset(request.email)
+    return {"message": "If that email is registered, a reset code has been sent to it."}
+
+
+@app.post("/reset-password")
+def reset_password(request: ResetPasswordRequest):
+    try:
+        reset_password_with_code(request.email, request.code, request.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    write_audit("PASSWORD_RESET", details=f"Password reset via emailed code for {request.email}", result="SUCCESS")
+    return {"message": "Password updated. You can now sign in with your new password."}
 
 
 @app.post("/login")
