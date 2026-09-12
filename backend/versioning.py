@@ -21,7 +21,7 @@ from datetime import datetime
 
 from backend.database import get_connection
 from backend.security import calculate_hash, create_backup
-from backend.authorization import write_audit, has_authorization_for
+from backend.authorization import write_audit
 
 
 def _row_to_dict(row):
@@ -43,29 +43,6 @@ _SELECT_COLS = """
     document_key, version, parent_document_id, created_by, owner_username,
     authorization_id
 """
-
-
-def sanitize_username(username: str) -> str:
-    cleaned = "".join(c for c in (username or "") if c.isalnum() or c in "-_.")
-    return cleaned or "unknown"
-
-
-def make_document_key(owner: str, filename: str) -> str:
-    return f"{owner}::{filename}"
-
-
-def user_storage_dir(username: str) -> str:
-    path = os.path.join("storage", sanitize_username(username))
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
-def user_can_access_document(doc: dict, username: str) -> bool:
-    if not doc or not username:
-        return False
-    if doc.get("owner_username") == username or doc.get("created_by") == username:
-        return True
-    return has_authorization_for(doc.get("document_key"), username)
 
 
 def get_document(document_id: int):
@@ -104,21 +81,32 @@ def list_document_versions(document_key: str):
     return [_row_to_dict(r) for r in rows]
 
 
-def list_documents_grouped(username: str):
-    """One entry per document family this user is allowed to see:
-    documents they uploaded, plus documents they were given an edit key for."""
+def list_documents_grouped():
+    """One entry per document family, showing its current active
+    version, across ALL accounts. Kept for internal/back-compat use —
+    prefer list_documents_visible_to() for anything user-facing."""
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute(
-        """
-        SELECT DISTINCT document_key FROM documents
-        WHERE owner_username = ? OR created_by = ?
+    cursor.execute("SELECT DISTINCT document_key FROM documents")
+    keys = [r[0] for r in cursor.fetchall()]
+    connection.close()
+    return [get_active_version(k) for k in keys if get_active_version(k)]
+
+
+def list_documents_visible_to(username: str):
+    """Each account only sees its own uploaded documents — plus any
+    document someone else has explicitly shared with it via a valid
+    authorization key (so the recipient of a key can still find that
+    document to act on it). This is what powers the per-account
+    'My Documents' list."""
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT DISTINCT document_key FROM documents WHERE owner_username = ?
         UNION
         SELECT DISTINCT document_key FROM authorizations
         WHERE employee_username = ? AND revoked = 0
-        """,
-        (username, username, username),
-    )
+    """, (username, username))
     keys = [r[0] for r in cursor.fetchall()]
     connection.close()
     return [get_active_version(k) for k in keys if get_active_version(k)]
@@ -196,23 +184,26 @@ def _set_status(document_id: int, status: str) -> None:
     connection.close()
 
 
-def resolve_active_document(username: str) -> dict:
-    """What /chat actually calls. Uses this account's most recently
-    uploaded document only — never another user's files."""
+def resolve_active_document(current_user: str) -> dict:
+    """What /chat actually calls. Finds THIS account's most recently
+    touched document family (never another account's), verifies its
+    active version's integrity, and only returns text if that check
+    passes. Falls back to storage/test.txt (unverified, matches old
+    demo behavior) if this account has never uploaded anything."""
     connection = get_connection()
     cursor = connection.cursor()
     cursor.execute(
-        """
-        SELECT document_key FROM documents
-        WHERE owner_username = ? OR created_by = ?
-        ORDER BY id DESC LIMIT 1
-        """,
-        (username, username),
+        "SELECT document_key FROM documents WHERE owner_username = ? ORDER BY id DESC LIMIT 1",
+        (current_user,),
     )
     row = cursor.fetchone()
     connection.close()
 
     if row is None:
+        fallback = "storage/test.txt"
+        if os.path.exists(fallback):
+            with open(fallback, "r", encoding="utf-8", errors="ignore") as f:
+                return {"ok": True, "text": f.read(), "document_id": None, "status": "UNVERIFIED_DEMO"}
         return {"ok": False, "status": "NO_DOCUMENT", "message": "No document has been uploaded yet."}
 
     active = get_active_version(row[0])
@@ -239,13 +230,9 @@ def create_document_version(document_key: str, new_text: str, created_by: str,
         raise ValueError(f"No existing document found for '{document_key}'")
 
     next_version = current["version"] + 1
-    display_name = current["filename"]
-    if "::" in document_key:
-        display_name = document_key.split("::", 1)[1]
-    base, ext = os.path.splitext(os.path.basename(display_name))
+    base, ext = os.path.splitext(document_key)
     new_filename = f"{base}__v{next_version}{ext}"
-    owner = current.get("owner_username") or created_by
-    new_filepath = os.path.join(user_storage_dir(owner), new_filename)
+    new_filepath = os.path.join("storage", new_filename)
 
     with open(new_filepath, "w", encoding="utf-8") as f:
         f.write(new_text)

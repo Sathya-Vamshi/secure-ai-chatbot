@@ -1,7 +1,6 @@
 import sqlite3
 import os
 from datetime import datetime
-from typing import Optional
 
 DB_PATH = "database/documents.db"
 
@@ -142,12 +141,16 @@ def create_database():
     )
     """)
 
-    # --- chat conversations (one account, many chats) --------------------
+    # --- chats -----------------------------------------------------------
+    # A "chat" is one conversation thread that belongs to exactly one
+    # account. chat_history rows are grouped under a chat_id so a user
+    # can have several separate conversations and switch between them,
+    # instead of one single ever-growing transcript.
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS conversations(
+    CREATE TABLE IF NOT EXISTS chats(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
-        title TEXT NOT NULL DEFAULT 'New chat',
+        title TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )
@@ -163,48 +166,12 @@ def create_database():
         timestamp TEXT NOT NULL
     )
     """)
-    _ensure_column(cursor, "chat_history", "conversation_id", "INTEGER")
 
-    # Namespace document families per owner so two accounts can each have
-    # their own "report.txt" without seeing or overwriting each other.
-    cursor.execute(
-        "UPDATE documents SET owner_username = COALESCE(NULLIF(owner_username, ''), created_by) "
-        "WHERE owner_username IS NULL OR owner_username = ''"
-    )
-    cursor.execute(
-        """
-        UPDATE documents
-        SET document_key = owner_username || '::' || document_key
-        WHERE owner_username IS NOT NULL
-          AND document_key IS NOT NULL
-          AND instr(document_key, '::') = 0
-        """
-    )
-    cursor.execute(
-        """
-        UPDATE authorizations
-        SET document_key = created_by || '::' || document_key
-        WHERE created_by IS NOT NULL
-          AND document_key IS NOT NULL
-          AND instr(document_key, '::') = 0
-        """
-    )
-
-    # Existing transcripts become one private conversation per user.
-    cursor.execute(
-        "SELECT DISTINCT user_id FROM chat_history WHERE conversation_id IS NULL"
-    )
-    for (uid,) in cursor.fetchall():
-        now = datetime.now().isoformat()
-        cursor.execute(
-            "INSERT INTO conversations (user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-            (uid, "Previous chat", now, now),
-        )
-        conv_id = cursor.lastrowid
-        cursor.execute(
-            "UPDATE chat_history SET conversation_id = ? WHERE user_id = ? AND conversation_id IS NULL",
-            (conv_id, uid),
-        )
+    # chat_id is added on top (nullable) so any pre-existing chat_history
+    # rows from before multi-chat support keep working — they just live
+    # in a "legacy" bucket (chat_id IS NULL) that the old endpoints still
+    # serve, while every new message is filed under a real chat.
+    _ensure_column(cursor, "chat_history", "chat_id", "INTEGER")
 
     # BUG FIX: this function never committed or closed its connection.
     # CREATE TABLE statements happened to survive because SQLite
@@ -220,44 +187,57 @@ def create_database():
     connection.close()
 
 
-def create_conversation(user_id: str, title: str = "New chat") -> dict:
+def _chat_title_from(message: str) -> str:
+    """Turn the first message of a new conversation into a short,
+    human-readable title for the sidebar list, the way most chat apps
+    do — trimmed and capped so it never wraps to more than one line."""
+    title = " ".join(message.strip().split())
+    if not title:
+        return "New chat"
+    return title[:57] + "…" if len(title) > 57 else title
+
+
+def create_chat(user_id: str, title: str = None) -> int:
+    """Start a brand-new, empty conversation for this account and
+    return its id. Chats are always private to the account that owns
+    them — user_id is what enforces that everywhere below."""
     now = datetime.now().isoformat()
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO conversations (user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        (user_id, title, now, now),
+        "INSERT INTO chats (user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+        (user_id, title or "New chat", now, now),
     )
-    conv_id = cur.lastrowid
     conn.commit()
+    chat_id = cur.lastrowid
     conn.close()
-    return {"id": conv_id, "user_id": user_id, "title": title, "created_at": now, "updated_at": now}
+    return chat_id
 
 
-def list_conversations(user_id: str) -> list[dict]:
+def list_chats(user_id: str) -> list[dict]:
+    """This account's conversations, most recently active first — what
+    populates the 'switch between chats' list in the sidebar."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        """
-        SELECT id, title, created_at, updated_at FROM conversations
-        WHERE user_id = ? ORDER BY updated_at DESC, id DESC
-        """,
+        "SELECT id, title, created_at, updated_at FROM chats "
+        "WHERE user_id = ? ORDER BY updated_at DESC",
         (user_id,),
     )
     rows = cur.fetchall()
     conn.close()
-    return [
-        {"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]}
-        for r in rows
-    ]
+    return [{"id": r[0], "title": r[1], "created_at": r[2], "updated_at": r[3]} for r in rows]
 
 
-def get_conversation(conversation_id: int, user_id: str) -> Optional[dict]:
+def get_chat(user_id: str, chat_id: int) -> dict | None:
+    """A single chat, but ONLY if it belongs to user_id — this is the
+    ownership check every chat-scoped endpoint relies on, same pattern
+    as document ownership."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, title, created_at, updated_at FROM conversations WHERE id = ? AND user_id = ?",
-        (conversation_id, user_id),
+        "SELECT id, title, created_at, updated_at FROM chats WHERE id = ? AND user_id = ?",
+        (chat_id, user_id),
     )
     row = cur.fetchone()
     conn.close()
@@ -266,99 +246,91 @@ def get_conversation(conversation_id: int, user_id: str) -> Optional[dict]:
     return {"id": row[0], "title": row[1], "created_at": row[2], "updated_at": row[3]}
 
 
-def delete_conversation(conversation_id: int, user_id: str) -> bool:
+def touch_chat(chat_id: int, retitle_from: str = None) -> None:
+    """Bump a chat's updated_at (so it floats to the top of the list)
+    and, if it's still using the default title, set a real title from
+    the first message sent in it."""
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        "DELETE FROM chat_history WHERE conversation_id = ? AND user_id = ?",
-        (conversation_id, user_id),
-    )
-    cur.execute(
-        "DELETE FROM conversations WHERE id = ? AND user_id = ?",
-        (conversation_id, user_id),
-    )
+    if retitle_from:
+        cur.execute(
+            "UPDATE chats SET updated_at = ?, "
+            "title = CASE WHEN title = 'New chat' THEN ? ELSE title END "
+            "WHERE id = ?",
+            (datetime.now().isoformat(), _chat_title_from(retitle_from), chat_id),
+        )
+    else:
+        cur.execute("UPDATE chats SET updated_at = ? WHERE id = ?", (datetime.now().isoformat(), chat_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_chat(user_id: str, chat_id: int) -> bool:
+    """Delete a chat and every message in it. Returns False (and does
+    nothing) if this account doesn't own that chat."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM chats WHERE id = ? AND user_id = ?", (chat_id, user_id))
     deleted = cur.rowcount > 0
+    if deleted:
+        cur.execute("DELETE FROM chat_history WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
     conn.commit()
     conn.close()
     return deleted
 
 
-def add_chat_message(user_id: str, sender: str, message: str, conversation_id: int) -> None:
-    """Insert a chat message into this user's conversation only."""
-    now = datetime.now().isoformat()
+def add_chat_message(user_id: str, sender: str, message: str, chat_id: int = None) -> None:
+    """Insert a chat message into the chat_history table.
+    `sender` must be either 'user' or 'bot'. `chat_id` files it under a
+    specific conversation; leaving it None keeps old, pre-multi-chat
+    behavior (a single legacy bucket) for backward compatibility."""
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, title FROM conversations WHERE id = ? AND user_id = ?",
-        (conversation_id, user_id),
-    )
-    conv = cur.fetchone()
-    if conv is None:
-        conn.close()
-        raise ValueError("Conversation not found.")
-    cur.execute(
-        "INSERT INTO chat_history (user_id, sender, message, timestamp, conversation_id) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (user_id, sender, message, now, conversation_id),
-    )
-    title = conv[1]
-    if sender == "user" and (not title or title in ("New chat", "Previous chat")):
-        title = message.strip().splitlines()[0][:48] or title
-    cur.execute(
-        "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-        (title, now, conversation_id, user_id),
+        "INSERT INTO chat_history (user_id, sender, message, timestamp, chat_id) VALUES (?, ?, ?, ?, ?)",
+        (user_id, sender, message, datetime.now().isoformat(), chat_id),
     )
     conn.commit()
     conn.close()
 
 
-def get_chat_history(user_id: str, conversation_id: int, limit: int = 300) -> list[dict]:
-    """Return one conversation's transcript for this user only."""
+def get_chat_history(user_id: str, chat_id: int = None, limit: int = 300) -> list[dict]:
+    """This user's transcript, oldest first, so the frontend can render
+    it top-to-bottom exactly like it was typed. Pass chat_id to get one
+    specific conversation; omit it to get the legacy (pre-multi-chat)
+    bucket only, for backward compatibility."""
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT sender, message, timestamp FROM chat_history
-        WHERE user_id = ? AND conversation_id = ?
-        ORDER BY id ASC LIMIT ?
-        """,
-        (user_id, conversation_id, limit),
-    )
+    if chat_id is not None:
+        cur.execute(
+            """
+            SELECT sender, message, timestamp FROM chat_history
+            WHERE user_id = ? AND chat_id = ? ORDER BY id ASC LIMIT ?
+            """,
+            (user_id, chat_id, limit),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT sender, message, timestamp FROM chat_history
+            WHERE user_id = ? AND chat_id IS NULL ORDER BY id ASC LIMIT ?
+            """,
+            (user_id, limit),
+        )
     rows = cur.fetchall()
     conn.close()
     return [{"sender": r[0], "message": r[1], "timestamp": r[2]} for r in rows]
 
 
-def clear_chat_history(user_id: str, conversation_id: Optional[int] = None) -> None:
-    """Wipe one conversation, or every conversation belonging to this user."""
+def clear_chat_history(user_id: str, chat_id: int = None) -> None:
+    """Wipe a transcript. With no chat_id, wipes only the legacy bucket
+    (kept for backward compatibility with the old 'New chat' behavior);
+    to delete a real chat entirely, use delete_chat() instead."""
     conn = get_connection()
     cur = conn.cursor()
-    if conversation_id is None:
-        cur.execute("DELETE FROM chat_history WHERE user_id = ?", (user_id,))
-        cur.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
+    if chat_id is not None:
+        cur.execute("DELETE FROM chat_history WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
     else:
-        cur.execute(
-            "DELETE FROM chat_history WHERE user_id = ? AND conversation_id = ?",
-            (user_id, conversation_id),
-        )
-        cur.execute(
-            "DELETE FROM conversations WHERE id = ? AND user_id = ?",
-            (conversation_id, user_id),
-        )
+        cur.execute("DELETE FROM chat_history WHERE user_id = ? AND chat_id IS NULL", (user_id,))
     conn.commit()
     conn.close()
-
-
-def count_user_documents(username: str) -> int:
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT COUNT(*) FROM documents
-        WHERE owner_username = ? AND status != 'SUPERSEDED'
-        """,
-        (username,),
-    )
-    count = cur.fetchone()[0]
-    conn.close()
-    return count

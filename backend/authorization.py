@@ -199,6 +199,66 @@ def revoke_authorization(authorization_id: int, revoked_by: str) -> bool:
     return True
 
 
+def find_document_for_key(employee_username: str, raw_key: str, permission: str = "EDIT"):
+    """The one-step redemption lookup: given ONLY the raw key and the
+    account redeeming it, work out which document it unlocks — the
+    person pasting the key should never have to already know or pick
+    the right document first.
+
+    Deliberately does NOT consume a use; it's a preview/discovery step.
+    The use is only consumed later, in verify_and_consume_authorization,
+    when the edit is actually submitted — so just unlocking a document
+    to look at it can never burn through a single-use key.
+
+    Returns (True, document_key, authorization_id, "OK") on success, or
+    (False, None, None, reason) on failure.
+    """
+    key_hash = hash_secret(raw_key)
+    now = datetime.now(timezone.utc)
+
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT id, document_key, key_hash, permission, expires_at, max_uses, uses_count, revoked
+        FROM authorizations
+        WHERE employee_username = ?
+    """, (employee_username,))
+    candidates = cursor.fetchall()
+    connection.close()
+
+    for (auth_id, document_key, stored_hash, stored_permission, expires_at,
+         max_uses, uses_count, revoked) in candidates:
+
+        if stored_hash != key_hash:
+            continue  # not this record — try the next candidate, if any
+
+        if revoked:
+            return False, None, None, "This authorization has been revoked."
+
+        if stored_permission != permission:
+            return False, None, None, f"This key does not grant '{permission}' permission."
+
+        if expires_at:
+            try:
+                expiry = datetime.fromisoformat(expires_at)
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if now > expiry:
+                    return False, None, None, "This authorization key has expired."
+            except ValueError:
+                pass  # malformed date shouldn't hard-crash the request
+
+        if max_uses is not None and uses_count >= max_uses:
+            return False, None, None, "This authorization key has already been used the maximum number of times."
+
+        return True, document_key, auth_id, "OK"
+
+    # No candidate matched at all (wrong key, or a key meant for a
+    # different account). One generic message either way, so we don't
+    # leak which part was wrong.
+    return False, None, None, "That authorization key isn't valid for your account."
+
+
 def verify_and_consume_authorization(document_key: str, employee_username: str,
                                       raw_key: str, permission: str = "EDIT"):
     """Checks every rule required by the spec, scoped to this exact
