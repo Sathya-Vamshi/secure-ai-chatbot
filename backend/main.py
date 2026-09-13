@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -22,6 +22,7 @@ from backend.database import (
     create_database, get_connection, add_chat_message,
     get_chat_history, clear_chat_history,
     create_chat, list_chats, get_chat, touch_chat, delete_chat,
+    set_active_document,
 )
 from backend.rag import (
     is_stats_question,
@@ -34,16 +35,21 @@ from backend.model_router import (
     is_weak_answer,
 )
 from backend.sanitizer import sanitize_input, sanitize_output, refusal_message_for
+from backend.system_info import (
+    is_system_info_question, get_permission as get_system_info_permission,
+    set_permission as set_system_info_permission, answer_system_info, PERMISSION_PROMPT,
+)
 from backend.authorization import (
     create_authorization, list_authorizations, revoke_authorization,
     verify_and_consume_authorization, find_document_for_key,
     is_rate_limited, record_failed_attempt,
-    reset_attempts, write_audit, get_audit_log,
+    reset_attempts, write_audit, get_audit_log, get_audit_log_for_user,
 )
 from backend.versioning import (
     get_document, get_active_version, list_document_versions,
     list_documents_grouped, list_documents_visible_to,
     verify_document_integrity, resolve_active_document,
+    resolve_active_key, chat_document_reference, has_switch_intent,
     create_document_version,
 )
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
@@ -116,6 +122,18 @@ def require_owner(user_info: dict = Depends(get_current_user_info)) -> dict:
     return user_info
 
 
+def _client_info(request: "Request | None") -> dict:
+    """IP + browser info for the audit log, pulled straight off the
+    incoming request. Respects X-Forwarded-For when the app is running
+    behind a reverse proxy/load balancer, so the logged IP is the real
+    visitor's, not just the proxy's."""
+    if request is None:
+        return {"ip_address": None, "user_agent": None}
+    forwarded = request.headers.get("x-forwarded-for")
+    ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else None)
+    return {"ip_address": ip, "user_agent": request.headers.get("user-agent")}
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -143,6 +161,7 @@ def health():
 
 @app.post("/upload")
 def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     current_user: str = Depends(get_current_user)
 ):
@@ -212,6 +231,7 @@ def upload_document(
         "DOCUMENT_UPLOADED", username=current_user, document_key=document_key,
         document_id=document_id, new_hash=original_hash, result="SUCCESS",
         details=f"Uploaded '{file.filename}' as v{next_version}.",
+        **_client_info(request),
     )
 
     return {
@@ -399,7 +419,7 @@ def _save_and_reply(current_user: str, chat_id: int, user_message: str, bot_mess
 
 
 @app.post("/chat")
-def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
+def chat(request: ChatRequest, http_request: Request, current_user: str = Depends(get_current_user)):
 
     # Resolve which conversation this message belongs to. No chat_id
     # (or one that isn't this account's) starts a fresh conversation —
@@ -426,6 +446,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         write_audit(
             "INPUT_SANITIZATION", username=current_user, result="BLOCKED",
             details=f"risk=high categories={sanitize_result['categories']}",
+            **_client_info(http_request),
         )
         bot_message = refusal_message_for(sanitize_result["categories"])
         return _save_and_reply(
@@ -447,6 +468,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         write_audit(
             "INPUT_SANITIZATION", username=current_user, result="SANITIZED",
             details=f"risk=medium categories={sanitize_result['categories']}",
+            **_client_info(http_request),
         )
 
     # --- Trivial chit-chat: instant canned reply, no LLM call, no RAG ----
@@ -458,12 +480,62 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
             input_sanitized=input_sanitized, output_sanitized=False, risk_level=risk_level,
         )
 
+    # --- System info (date/time): never guessed by the LLM. A language
+    # model has no real clock, so asking Ollama "what's today's date"
+    # just invites a confident, wrong answer. This is answered directly
+    # from the server's actual clock instead — but only after the user
+    # has explicitly granted permission, since it's real system access
+    # and off by default for every account.
+    if is_system_info_question(effective_message):
+        if not get_system_info_permission(current_user):
+            return _save_and_reply(
+                current_user, chat_id, request.message, PERMISSION_PROMPT,
+                model_used=None, response_time_seconds=0.0,
+                input_sanitized=input_sanitized, output_sanitized=False, risk_level=risk_level,
+                permission_requested="system_info",
+            )
+        bot_message = answer_system_info(effective_message)
+        return _save_and_reply(
+            current_user, chat_id, request.message, bot_message,
+            model_used="system-clock (no LLM call)", response_time_seconds=0.0,
+            input_sanitized=input_sanitized, output_sanitized=False, risk_level=risk_level,
+        )
+
+    # --- Document switching: figure out, from the message itself, whether
+    # the person is asking about a different one of their documents than
+    # whichever one is currently active — either explicitly ("switch to
+    # the invoice") or just by asking a question that's clearly about
+    # another uploaded document. If so, switch automatically and let the
+    # reply say so, instead of silently answering from the wrong document
+    # or forwarding an unanswerable "switch documents" request to the LLM
+    # (which has no idea that's even a thing it can do).
+    switch_note = ""
+    visible_docs = list_documents_visible_to(current_user)
+    if visible_docs:
+        current_active_key = resolve_active_key(current_user)
+        matched_doc = chat_document_reference(visible_docs, effective_message)
+        if matched_doc is not None and matched_doc["document_key"] != current_active_key:
+            set_active_document(current_user, matched_doc["document_key"])
+            switch_note = f"📄 Switching your active document to **{matched_doc['filename']}** — this looks related to it.\n\n"
+        elif matched_doc is not None and has_switch_intent(effective_message):
+            # They explicitly asked to switch to a document that's
+            # already the active one — answer that directly rather than
+            # letting the raw LLM guess at a capability it knows nothing
+            # about (it would otherwise say something like "I can't
+            # switch documents", which is simply wrong).
+            bot_message = f"You're already chatting with **{matched_doc['filename']}** — no need to switch!"
+            return _save_and_reply(
+                current_user, chat_id, request.message, bot_message,
+                model_used=None, response_time_seconds=0.0,
+                input_sanitized=input_sanitized, output_sanitized=False, risk_level=risk_level,
+            )
+
     # --- Integrity gate: verify the active document's hash BEFORE any
     # content from it reaches stats, cache, RAG, or the LLM. A tampered
     # (or missing) document is blocked right here — this is the one case
     # that still stops the conversation, since it's a security signal,
     # not just "no document yet".
-    resolved = resolve_active_document(current_user)
+    resolved = resolve_active_document(current_user, **_client_info(http_request))
     has_document = False
     document = ""
 
@@ -477,7 +549,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         # completely independently of anything sanitize_input() decided.
         log_security_event(resolved["status"], resolved["message"])
         return _save_and_reply(
-            current_user, chat_id, request.message, resolved["message"],
+            current_user, chat_id, request.message, switch_note + resolved["message"],
             model_used=None, response_time_seconds=0.0,
             input_sanitized=input_sanitized, output_sanitized=False, risk_level=risk_level,
         )
@@ -496,7 +568,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         else:
             bot_message = answer_stats_question(effective_message, document)
         return _save_and_reply(
-            current_user, chat_id, request.message, bot_message,
+            current_user, chat_id, request.message, switch_note + bot_message,
             model_used="stats-engine (no LLM call)", response_time_seconds=0.0,
             input_sanitized=input_sanitized, output_sanitized=False, risk_level=risk_level,
         )
@@ -513,7 +585,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         cached["input_sanitized"] = input_sanitized
         cached["risk_level"] = risk_level
         return _save_and_reply(
-            current_user, chat_id, request.message, cached["message"],
+            current_user, chat_id, request.message, switch_note + cached["message"],
             **{k: v for k, v in cached.items() if k != "message"},
         )
 
@@ -540,7 +612,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
     except requests.exceptions.Timeout:
         bot_message = f"The AI model ({model}) took too long to respond. Try a shorter/more specific question, or check that 'ollama serve' is running."
         return _save_and_reply(
-            current_user, chat_id, request.message, bot_message,
+            current_user, chat_id, request.message, switch_note + bot_message,
             model_used=model, error="timeout",
             input_sanitized=input_sanitized, output_sanitized=False, risk_level=risk_level,
         )
@@ -548,7 +620,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
     except requests.exceptions.RequestException as exc:
         bot_message = f"AI model request failed: {str(exc)}"
         return _save_and_reply(
-            current_user, chat_id, request.message, bot_message,
+            current_user, chat_id, request.message, switch_note + bot_message,
             model_used=model, error="request_failed",
             input_sanitized=input_sanitized, output_sanitized=False, risk_level=risk_level,
         )
@@ -579,6 +651,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
         write_audit(
             "OUTPUT_SANITIZATION", username=current_user, result="SANITIZED",
             details=f"categories={output_result['categories']} blocked_entirely={output_result['blocked_entirely']}",
+            **_client_info(http_request),
         )
 
     elapsed = round(time.monotonic() - started, 2)
@@ -596,7 +669,7 @@ def chat(request: ChatRequest, current_user: str = Depends(get_current_user)):
     # document is instant next time.
     _chat_cache[cache_key] = {"message": answer, **extra}
 
-    return _save_and_reply(current_user, chat_id, request.message, answer, **extra)
+    return _save_and_reply(current_user, chat_id, request.message, switch_note + answer, **extra)
 
 
 # --- Multi-chat: list / switch between / delete conversations -------------
@@ -646,17 +719,19 @@ def clear_chat_history_endpoint(current_user: str = Depends(get_current_user)):
 
 
 @app.get("/audit-logs")
-def audit_logs_endpoint(owner=Depends(require_owner)):
-    """Owner-only: the full structured audit trail (logins, uploads,
-    edits, key generation/revocation, denied/blocked attempts, restores,
-    tampering detections...) — the single place to see 'what happened'
-    if something needs investigating."""
-    return {"audit_log": get_audit_log()}
+def audit_logs_endpoint(user_info: dict = Depends(get_current_user_info)):
+    """Every account can see its OWN activity history. The single Owner
+    account (admin) is the exception: it sees every account's activity,
+    the same way it's the only account that sees Security Logs."""
+    if user_info.get("role") == "owner":
+        return {"audit_log": get_audit_log(), "scope": "all_accounts"}
+    return {"audit_log": get_audit_log_for_user(user_info["username"]), "scope": "own_account"}
 
 
 @app.get("/integrity/{document_id}")
 def check_integrity(
     document_id: int,
+    request: Request,
     current_user: str = Depends(get_current_user)
 ):
     doc = get_document(document_id)
@@ -664,7 +739,7 @@ def check_integrity(
     if doc is None:
         return {"error": "Document not found"}
 
-    result = verify_document_integrity(document_id)
+    result = verify_document_integrity(document_id, **_client_info(request))
 
     if result["status"] == "NOT_FOUND":
         return {"error": "Document not found"}
@@ -696,6 +771,7 @@ def check_integrity(
 @app.post("/restore/{document_id}")
 def restore_document(
     document_id: int,
+    request: Request,
     current_user: str = Depends(get_current_user)
 ):
 
@@ -729,8 +805,9 @@ def restore_document(
     conn.commit()
     conn.close()
     write_audit(
-        "DOCUMENT_RESTORED", document_id=document_id, result="SUCCESS",
+        "DOCUMENT_RESTORED", username=current_user, document_id=document_id, result="SUCCESS",
         new_hash=restored_hash, details="Restored from trusted backup after tamper detection.",
+        **_client_info(request),
     )
 
     return {
@@ -770,6 +847,28 @@ def document_count(current_user: str = Depends(get_current_user)):
     anything shared with it) — not a site-wide total."""
     return {"count": len(list_documents_visible_to(current_user))}
 
+
+# ===========================================================================
+# System-info permission (date/time access) — off by default per account
+# ===========================================================================
+
+class SystemInfoPermissionRequest(BaseModel):
+    allow: bool
+
+
+@app.get("/settings/system-info-access")
+def get_system_info_access(current_user: str = Depends(get_current_user)):
+    return {"allowed": get_system_info_permission(current_user)}
+
+
+@app.post("/settings/system-info-access")
+def set_system_info_access(
+    request: SystemInfoPermissionRequest,
+    current_user: str = Depends(get_current_user),
+):
+    set_system_info_permission(current_user, request.allow)
+    return {"allowed": request.allow}
+
 # ===========================================================================
 # Authorized document modification / authentication key feature
 # ===========================================================================
@@ -801,6 +900,7 @@ class UnlockDocumentRequest(BaseModel):
 @app.post("/admin/users")
 def create_employee(
     request: CreateEmployeeRequest,
+    http_request: Request,
     owner=Depends(require_owner),
 ):
     if user_exists(request.username):
@@ -810,7 +910,8 @@ def create_employee(
 
     create_user(request.username, request.password, role="employee")
     write_audit("USER_CREATED", username=owner["username"], result="SUCCESS",
-                details=f"Created employee account '{request.username}'")
+                details=f"Created employee account '{request.username}'",
+                **_client_info(http_request))
 
     return {"message": f"Employee account '{request.username}' created.", "username": request.username, "role": "employee"}
 
@@ -846,6 +947,32 @@ def document_versions(document_key: str, current_user: str = Depends(get_current
         # account that has no business knowing about it.
         raise HTTPException(status_code=404, detail="No such document.")
     return {"document_key": document_key, "versions": versions}
+
+
+@app.get("/documents/active")
+def get_active_document_endpoint(current_user: str = Depends(get_current_user)):
+    """Every document this account can use in chat, plus which one is
+    currently active — what powers the document switcher in the Chat view."""
+    return {
+        "documents": list_documents_visible_to(current_user),
+        "active_document_key": resolve_active_key(current_user),
+    }
+
+
+@app.post("/documents/{document_id}/activate")
+def activate_document(document_id: int, current_user: str = Depends(get_current_user)):
+    """Explicitly make this document the one /chat uses for this account
+    from now on — called when someone picks a document from the Chat
+    view's switcher (or asks in plain language to switch to it)."""
+    doc = get_document(document_id)
+    if doc is None or not _can_access_document(doc, current_user):
+        raise HTTPException(status_code=404, detail="Document not found.")
+    set_active_document(current_user, doc["document_key"])
+    return {
+        "message": f"Active document set to \"{doc['filename']}\".",
+        "document_key": doc["document_key"],
+        "filename": doc["filename"],
+    }
 
 
 # --- Generate & manage authorization keys -----------------------------
@@ -915,6 +1042,7 @@ def revoke_authorization_endpoint(authorization_id: int, user_info=Depends(get_c
 @app.post("/authorization/unlock")
 def unlock_document_with_key(
     request: UnlockDocumentRequest,
+    http_request: Request,
     current_user: str = Depends(get_current_user),
 ):
     """The one-step redemption flow: paste a key, get the right
@@ -950,6 +1078,7 @@ def unlock_document_with_key(
         record_failed_attempt(current_user)
         write_audit(
             "DENIED_EDIT", username=current_user, result="DENIED", details=reason,
+            **_client_info(http_request),
         )
         log_security_event("AUTHORIZATION_DENIED", f"{current_user}: {reason}")
         raise HTTPException(status_code=403, detail=reason)
@@ -977,6 +1106,7 @@ def unlock_document_with_key(
 def edit_document(
     document_id: int,
     request: EditDocumentRequest,
+    http_request: Request,
     current_user: str = Depends(get_current_user),
 ):
     if is_rate_limited(current_user):
@@ -987,6 +1117,7 @@ def edit_document(
         write_audit(
             "AUTHORIZATION_RATE_LIMITED", username=current_user, result="BLOCKED",
             details="Too many recent failed authorization attempts.",
+            **_client_info(http_request),
         )
         raise HTTPException(
             status_code=429,
@@ -1011,6 +1142,7 @@ def edit_document(
         write_audit(
             "DENIED_EDIT", username=current_user, document_key=document_key,
             document_id=document_id, result="DENIED", details=reason,
+            **_client_info(http_request),
         )
         log_security_event("AUTHORIZATION_DENIED", f"{current_user}: {reason}")
         raise HTTPException(status_code=403, detail=reason)
@@ -1022,6 +1154,7 @@ def edit_document(
         new_text=request.new_content,
         created_by=current_user,
         authorization_id=authorization_id,
+        **_client_info(http_request),
     )
 
     return {
@@ -1075,7 +1208,7 @@ class ResetPasswordRequest(BaseModel):
 
 
 @app.post("/signup")
-def signup(request: SignupRequest):
+def signup(request: SignupRequest, http_request: Request):
     """Self-service account creation. Every new account is role='employee'
     — the only 'owner' account is the fixed admin/admin_123 login, which
     is the one account that can see Security Logs."""
@@ -1085,40 +1218,47 @@ def signup(request: SignupRequest):
         write_audit(
             "SIGNUP_FAILED", username=request.username, result="DENIED",
             details=str(e),
+            **_client_info(http_request),
         )
         raise HTTPException(status_code=400, detail=str(e))
 
-    write_audit("SIGNUP_SUCCESS", username=request.username, result="SUCCESS")
+    write_audit("SIGNUP_SUCCESS", username=request.username, result="SUCCESS",
+                **_client_info(http_request))
     return {"message": "Account created. You can now sign in.", "username": request.username, "role": "employee"}
 
 
 @app.post("/forgot-password")
-def forgot_password(request: ForgotPasswordRequest):
+def forgot_password(request: ForgotPasswordRequest, http_request: Request):
     """Always returns the same generic message, whether or not the email
     is registered, so this endpoint can't be used to check which emails
     have accounts."""
     request_password_reset(request.email)
+    write_audit("PASSWORD_RESET_REQUESTED", result="SUCCESS",
+                details=f"Reset code requested for {request.email}",
+                **_client_info(http_request))
     return {"message": "If that email is registered, a reset code has been sent to it."}
 
 
 @app.post("/reset-password")
-def reset_password(request: ResetPasswordRequest):
+def reset_password(request: ResetPasswordRequest, http_request: Request):
     try:
         reset_password_with_code(request.email, request.code, request.new_password)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    write_audit("PASSWORD_RESET", details=f"Password reset via emailed code for {request.email}", result="SUCCESS")
+    write_audit("PASSWORD_RESET", details=f"Password reset via emailed code for {request.email}", result="SUCCESS",
+                **_client_info(http_request))
     return {"message": "Password updated. You can now sign in with your new password."}
 
 
 @app.post("/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends()):
+def login(http_request: Request, form_data: OAuth2PasswordRequestForm = Depends()):
     """Authenticate user and return a JWT token."""
     user_row = get_user(form_data.username)
     if user_row is None:
         write_audit(
             "LOGIN_FAILED", username=form_data.username, result="DENIED",
             details="Unknown username.",
+            **_client_info(http_request),
         )
         raise HTTPException(status_code=400, detail="Invalid username or password")
     username, password_hash, role = user_row
@@ -1126,10 +1266,12 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()):
         write_audit(
             "LOGIN_FAILED", username=username, result="DENIED",
             details="Incorrect password.",
+            **_client_info(http_request),
         )
         raise HTTPException(status_code=400, detail="Invalid username or password")
     token = create_token(username, role)
-    write_audit("LOGIN_SUCCESS", username=username, result="SUCCESS")
+    write_audit("LOGIN_SUCCESS", username=username, result="SUCCESS",
+                **_client_info(http_request))
     return {
         "message": "Login successful",
         "access_token": token,

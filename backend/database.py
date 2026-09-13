@@ -81,6 +81,12 @@ def create_database():
     # by an older version of this project that has no email column yet.
     _ensure_column(cursor, "users", "email", "TEXT")
 
+    # Explicit, off-by-default permission before Aegis will access
+    # anything about the local system (currently: the server clock, for
+    # accurate date/time answers instead of the model guessing). Never
+    # granted implicitly — see backend/system_info.py.
+    _ensure_column(cursor, "users", "allow_system_info", "INTEGER NOT NULL DEFAULT 0")
+
     # Case-insensitive-ish uniqueness for email, but only enforced for
     # rows that actually have one set — the seeded 'admin' owner account
     # has no email and shouldn't block anything.
@@ -141,6 +147,19 @@ def create_database():
     )
     """)
 
+    # Who/where a logged action came from. Added as nullable columns so
+    # this stays safe against a database created by an older version of
+    # this project. ip_address is the caller's network address as seen
+    # by the server; mac_address is a best-effort lookup that only
+    # succeeds when the caller is on the same local network segment as
+    # the server (see backend/authorization.py) — it's simply not
+    # possible to learn a client's MAC address over the open internet,
+    # browsers never expose it, so this will legitimately be empty for
+    # most remote users.
+    _ensure_column(cursor, "audit_log", "ip_address", "TEXT")
+    _ensure_column(cursor, "audit_log", "user_agent", "TEXT")
+    _ensure_column(cursor, "audit_log", "mac_address", "TEXT")
+
     # --- chats -----------------------------------------------------------
     # A "chat" is one conversation thread that belongs to exactly one
     # account. chat_history rows are grouped under a chat_id so a user
@@ -172,6 +191,17 @@ def create_database():
     # in a "legacy" bucket (chat_id IS NULL) that the old endpoints still
     # serve, while every new message is filed under a real chat.
     _ensure_column(cursor, "chat_history", "chat_id", "INTEGER")
+
+    # --- per-account "active document" -------------------------------
+    # Which document a chat should treat as "the" document right now.
+    # One row per account; defaults to nothing (falls back to "most
+    # recently uploaded" — see versioning.resolve_active_key()).
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS user_settings(
+        user_id TEXT PRIMARY KEY,
+        active_document_key TEXT
+    )
+    """)
 
     # BUG FIX: this function never committed or closed its connection.
     # CREATE TABLE statements happened to survive because SQLite
@@ -334,3 +364,30 @@ def clear_chat_history(user_id: str, chat_id: int = None) -> None:
         cur.execute("DELETE FROM chat_history WHERE user_id = ? AND chat_id IS NULL", (user_id,))
     conn.commit()
     conn.close()
+
+
+# --- per-account active document ------------------------------------------
+
+def set_active_document(user_id: str, document_key: str) -> None:
+    """Remember which document this account's chat should treat as
+    active from now on — set explicitly (picked from the Chat view's
+    document switcher) or automatically (the assistant noticed the
+    question was about a different uploaded document)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO user_settings (user_id, active_document_key) VALUES (?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET active_document_key = excluded.active_document_key",
+        (user_id, document_key),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_active_document_key(user_id: str) -> str:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT active_document_key FROM user_settings WHERE user_id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None

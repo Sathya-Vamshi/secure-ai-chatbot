@@ -762,6 +762,21 @@
   }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 
+  .doc-switcher {
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 500;
+    font-family: inherit;
+    padding: 2px 4px;
+    margin: 0;
+    max-width: 220px;
+    cursor: pointer;
+  }
+  .doc-switcher:focus { outline: none; box-shadow: none; }
+  .doc-switcher:disabled { color: var(--text-muted); cursor: default; }
+
   .view { display: none; flex: 1; min-height: 0; flex-direction: column; position: relative; }
   .view.active { display: flex; }
 
@@ -1012,6 +1027,23 @@
   input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   label.field-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 5px; }
 
+  .audit-filter-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 2px 0 14px;
+    flex-wrap: wrap;
+  }
+  .audit-filter-row input[type=text] {
+    flex: 1 1 260px;
+    margin-bottom: 0;
+  }
+  .audit-filter-row select {
+    flex: 0 0 auto;
+    width: auto;
+    margin-bottom: 0;
+  }
+
   table.data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   table.data-table th {
     text-align: left;
@@ -1240,13 +1272,29 @@
   .stat-box .num, .stat-box .label { position: relative; z-index: 1; }
 
   /* ---- Tables: card-wrapped with a calmer header and a hover row  */
-  table.data-table thead th { background: var(--paper); }
+  table.data-table thead th { background: var(--paper); white-space: nowrap; }
   table.data-table tbody tr { transition: background .12s ease; }
   table.data-table tbody tr:hover { background: var(--paper); }
-  #docsTableWrap table.data-table, #authList table.data-table,
-  #auditTrailWrap table.data-table, #securityEventsWrap table.data-table {
+  table.data-table td, table.data-table th { white-space: nowrap; }
+  table.data-table td.wrap-cell { white-space: normal; min-width: 220px; }
+  #docsTableWrap table.data-table, #authList table.data-table {
     border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; border-spacing: 0;
   }
+  /* Audit/security tables can get wide (time, action, user, target,
+     result, details, IP, device, MAC) — scroll horizontally inside a
+     bordered frame instead of clipping columns off-screen. */
+  .table-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+  }
+  .table-scroll table.data-table { border: none; border-radius: 0; border-spacing: 0; min-width: 920px; }
+  .table-scroll::-webkit-scrollbar { height: 9px; }
+  .table-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
+  .table-scroll::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+  .table-scroll::-webkit-scrollbar-track { background: transparent; }
 
   /* ---- Badges: a small status dot for faster scanning */
   .badge { position: relative; padding-left: 18px; }
@@ -1569,7 +1617,7 @@
     <button class="side-btn active" data-view="chat" onclick="setView('chat')"><span class="ic">💬</span> Chat</button>
     <button class="side-btn" data-view="documents" onclick="setView('documents')"><span class="ic">📄</span> Documents</button>
     <button class="side-btn" id="navTeam" data-view="team" onclick="setView('team')" style="display:none;"><span class="ic">👥</span> Team &amp; Access</button>
-    <button class="side-btn" id="navAudit" data-view="audit" onclick="setView('audit')" style="display:none;"><span class="ic">🛡️</span> Audit Log</button>
+    <button class="side-btn" id="navAudit" data-view="audit" onclick="setView('audit')"><span class="ic">🛡️</span> Audit Log</button>
     <button class="side-btn" data-view="about" onclick="setView('about')"><span class="ic">ℹ️</span> About</button>
 
     <div class="side-section-label">Your chats</div>
@@ -1604,7 +1652,12 @@
     <section class="view active" id="view-chat">
       <div class="topbar">
         <h2>Chat</h2>
-        <div class="topbar-status"><span class="dot"></span> <span id="docContextLabel">No document loaded</span></div>
+        <div class="topbar-status">
+          <span class="dot"></span>
+          <select id="activeDocSelect" class="doc-switcher" onchange="onActiveDocChange()" title="Which document Chat is currently using">
+            <option value="">No document loaded</option>
+          </select>
+        </div>
       </div>
 
       <div id="chatScroll" class="scrollbar-thin">
@@ -1756,7 +1809,7 @@
       </div>
     </section>
 
-    <!-- ---------------- AUDIT LOG VIEW (owner) ---------------- -->
+    <!-- ---------------- AUDIT LOG VIEW (every account sees its own; owner sees all) ---------------- -->
     <section class="view" id="view-audit">
       <div class="topbar">
         <h2>Audit Log</h2>
@@ -1765,10 +1818,17 @@
       <div class="content-scroll scrollbar-thin">
         <div class="content-col">
           <div class="panel reveal">
-            <p class="panel-sub" style="margin-bottom:14px;">Every login, upload, edit, key action, and blocked attempt is recorded here — the single place to check if something needs investigating.</p>
+            <p class="panel-sub" id="auditScopeNote" style="margin-bottom:14px;">Every login, upload, edit, key action, and blocked attempt is recorded here — the single place to check if something needs investigating.</p>
             <div class="toggle-group">
               <button class="toggle-btn active" id="tabAuditTrail" onclick="switchAuditTab('trail')">Audit trail</button>
-              <button class="toggle-btn" id="tabSecurityEvents" onclick="switchAuditTab('security')">Security events</button>
+              <button class="toggle-btn" id="tabSecurityEvents" onclick="switchAuditTab('security')" style="display:none;">Security events</button>
+            </div>
+            <div class="audit-filter-row">
+              <input type="text" id="auditSearch" placeholder="Search action, user, target, IP, device, details…" oninput="applyAuditFilters()">
+              <select id="auditResultFilter" onchange="applyAuditFilters()">
+                <option value="">All results</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" onclick="clearAuditFilters()">Clear</button>
             </div>
             <div id="auditTrailWrap"><div class="empty-note">Loading…</div></div>
             <div id="securityEventsWrap" style="display:none;"><div class="empty-note">Loading…</div></div>
@@ -1899,6 +1959,23 @@
               </div>
             </div>
 
+          </div>
+
+          <div class="panel reveal">
+            <h3>Privacy &amp; Permissions</h3>
+            <div class="about-item reveal">
+              <div class="about-icon">🕓</div>
+              <div style="flex:1;">
+                <h4>System date &amp; time access</h4>
+                <p style="margin-bottom:10px;">
+                  Off by default. A language model has no real clock, so Aegis never lets it guess the
+                  date or time — it only ever answers from this system's actual clock, and only once you've
+                  explicitly allowed it. You'll also be asked inline the first time you ask a date/time
+                  question, if you'd rather decide then.
+                </p>
+                <button class="btn btn-sm btn-ghost" id="systemInfoToggleBtn" onclick="toggleSystemInfoAccess()">Loading…</button>
+              </div>
+            </div>
           </div>
 
         </div>
@@ -2237,11 +2314,13 @@ function enterApp() {
   // owner-only.
   document.getElementById("navTeam").style.display = "flex";
   document.getElementById("createEmployeePanel").style.display = currentRole === "owner" ? "block" : "none";
-  document.getElementById("navAudit").style.display = currentRole === "owner" ? "flex" : "none";
+  document.getElementById("navAudit").style.display = "flex";
+  document.getElementById("tabSecurityEvents").style.display = currentRole === "owner" ? "" : "none";
 
   setView("chat");
   loadChatsList(true);
   loadDocumentsView();
+  loadActiveDocumentSwitcher();
 }
 
 /* Toggle a password field between hidden/visible, swapping the icon. */
@@ -2278,7 +2357,47 @@ function setView(name) {
 
   if (name === "documents") loadDocumentsView();
   if (name === "team") { populateDocSelect("authDocSelect"); refreshAuthorizations(); }
-  if (name === "audit" && currentRole === "owner") loadAuditView();
+  if (name === "audit") loadAuditView();
+  if (name === "about") loadSystemInfoAccessState();
+}
+
+/* ---------------------------------------------------------------- */
+/* System-info permission (date/time access) — persistent toggle on  */
+/* the About page, in addition to the inline Allow/Not now prompt.   */
+/* ---------------------------------------------------------------- */
+
+let systemInfoAllowed = false;
+
+async function loadSystemInfoAccessState() {
+  try {
+    const res = await authedFetch("/settings/system-info-access");
+    const data = await res.json();
+    systemInfoAllowed = !!data.allowed;
+  } catch (e) { /* leave as-is on failure */ }
+  renderSystemInfoToggle();
+}
+
+function renderSystemInfoToggle() {
+  const btn = document.getElementById("systemInfoToggleBtn");
+  if (!btn) return;
+  btn.className = "btn btn-sm " + (systemInfoAllowed ? "btn-primary" : "btn-ghost");
+  btn.innerText = systemInfoAllowed ? "Allowed — click to revoke" : "Not allowed — click to allow";
+}
+
+async function toggleSystemInfoAccess() {
+  const btn = document.getElementById("systemInfoToggleBtn");
+  btn.disabled = true;
+  try {
+    const res = await authedFetch("/settings/system-info-access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ allow: !systemInfoAllowed })
+    });
+    const data = await res.json();
+    systemInfoAllowed = !!data.allowed;
+  } catch (e) { /* ignore — button just reverts to its last known state */ }
+  btn.disabled = false;
+  renderSystemInfoToggle();
 }
 
 /* ---------------------------------------------------------------- */
@@ -2358,7 +2477,7 @@ function formatBotMessage(raw) {
   return html || "<p></p>";
 }
 
-function addMessage(text, sender, metaParts, isAlert, animate) {
+function addMessage(text, sender, metaParts, isAlert, animate, actions) {
   hideEmptyChat();
   const messages = document.getElementById("messages");
   const row = document.createElement("div");
@@ -2385,6 +2504,24 @@ function addMessage(text, sender, metaParts, isAlert, animate) {
       meta.appendChild(pill);
     });
     body.appendChild(meta);
+  }
+
+  // Inline quick-actions under a bot message — currently only used for
+  // the "allow access to system date/time?" permission prompt, so a
+  // grant/decline can happen right where it was asked instead of
+  // sending the person off to find a settings toggle.
+  if (actions && actions.length) {
+    const actionRow = document.createElement("div");
+    actionRow.style.cssText = "display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;";
+    actions.forEach(a => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-sm " + (a.primary ? "btn-primary" : "btn-ghost");
+      btn.innerText = a.label;
+      btn.onclick = () => a.onClick(btn, actionRow);
+      actionRow.appendChild(btn);
+    });
+    body.appendChild(actionRow);
   }
 
   if (sender === "bot") {
@@ -2533,6 +2670,10 @@ async function sendMessage() {
   addMessage(message, "user");
   input.value = "";
   input.style.height = "auto";
+  await postChatMessage(message);
+}
+
+async function postChatMessage(message) {
   document.getElementById("sendBtn").disabled = true;
   addTypingIndicator();
 
@@ -2553,7 +2694,34 @@ async function sendMessage() {
     if (data.cached) meta.push("cached");
 
     const isAlert = !!data.error || (data.message || "").startsWith("⚠️");
-    addMessage(data.message || "(no response)", "bot", meta, isAlert, true);
+
+    // The backend asked for permission before it will check the system
+    // clock. Offer Allow/Not now right on this message instead of
+    // making the person go find a settings toggle for it.
+    let actions = null;
+    if (data.permission_requested === "system_info") {
+      actions = [
+        { label: "Allow", primary: true, onClick: async (btn, row) => {
+            row.querySelectorAll("button").forEach(b => b.disabled = true);
+            try {
+              await authedFetch("/settings/system-info-access", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ allow: true })
+              });
+            } catch (e) { /* fall through — resend will just ask again */ }
+            row.remove();
+            await postChatMessage(message); // re-ask the same question now that access is granted
+          } },
+        { label: "Not now", onClick: (btn, row) => { row.remove(); } },
+      ];
+    }
+
+    addMessage(data.message || "(no response)", "bot", meta, isAlert, true, actions);
+
+    // Reflects any switch the assistant just made on its own (detected
+    // from the question itself), not just manual ones from the dropdown.
+    loadActiveDocumentSwitcher();
 
     // First message of a new conversation: the backend just created a
     // chat_id for it. Adopt it and refresh the sidebar so it appears
@@ -2601,6 +2769,50 @@ async function refreshStats() {
   } catch (e) { console.error(e); }
 }
 
+/* ---------------------------------------------------------------- */
+/* Active-document switcher (Chat topbar)                              */
+/* ---------------------------------------------------------------- */
+
+// Populates the Chat view's document dropdown from /documents/active
+// and pre-selects whichever one is actually active server-side — this
+// stays in sync with auto-switches the assistant makes on its own, not
+// just manual ones.
+async function loadActiveDocumentSwitcher() {
+  const select = document.getElementById("activeDocSelect");
+  try {
+    const res = await authedFetch("/documents/active");
+    const data = await res.json();
+    const docs = data.documents || [];
+
+    if (docs.length === 0) {
+      select.innerHTML = `<option value="">No document loaded</option>`;
+      select.disabled = true;
+      return;
+    }
+
+    select.disabled = false;
+    select.innerHTML = docs.map(d => `<option value="${d.id}">${escapeHtml(d.filename)}</option>`).join("");
+
+    const activeDoc = docs.find(d => d.document_key === data.active_document_key) || docs[docs.length - 1];
+    select.value = String(activeDoc.id);
+  } catch (e) {
+    select.innerHTML = `<option value="">Couldn't load documents</option>`;
+    select.disabled = true;
+  }
+}
+
+// Called when someone manually picks a different document from the
+// dropdown — makes it active immediately, the same way telling the
+// assistant "switch to X" in chat does.
+async function onActiveDocChange() {
+  const select = document.getElementById("activeDocSelect");
+  const documentId = select.value;
+  if (!documentId) return;
+  try {
+    await authedFetch(`/documents/${documentId}/activate`, { method: "POST" });
+  } catch (e) { console.error(e); }
+}
+
 async function renderDocumentsTable() {
   const wrap = document.getElementById("docsTableWrap");
   try {
@@ -2609,11 +2821,9 @@ async function renderDocumentsTable() {
     const docs = data.documents || [];
     if (docs.length === 0) {
       wrap.innerHTML = `<div class="empty-note">No documents uploaded yet — upload one above to get started.</div>`;
-      document.getElementById("docContextLabel").innerText = "No document loaded";
       return;
     }
     if (!currentDocumentId) currentDocumentId = docs[docs.length - 1].id;
-    document.getElementById("docContextLabel").innerText = "Active: " + docs[docs.length - 1].filename;
 
     wrap.innerHTML = `
       <table class="data-table">
@@ -2764,6 +2974,7 @@ async function uploadFile() {
       statusEl.innerText = `✅ Uploaded "${data.filename}" (v${data.version})`;
       clearChosenFile();
       loadDocumentsView();
+      loadActiveDocumentSwitcher();
     } else {
       statusEl.className = "form-status err";
       statusEl.innerText = "❌ " + (data.message || data.detail || "Upload failed");
@@ -3014,6 +3225,8 @@ async function revokeAuth(id) {
 /* ---------------------------------------------------------------- */
 
 let auditTab = "trail";
+let _auditRows = [];       // full, unfiltered audit trail from the last /audit-logs fetch
+let _securityEvents = [];  // full, unfiltered security events from the last /security-logs fetch
 
 function switchAuditTab(tab) {
   auditTab = tab;
@@ -3021,6 +3234,10 @@ function switchAuditTab(tab) {
   document.getElementById("tabSecurityEvents").classList.toggle("active", tab === "security");
   document.getElementById("auditTrailWrap").style.display = tab === "trail" ? "block" : "none";
   document.getElementById("securityEventsWrap").style.display = tab === "security" ? "block" : "none";
+  // Result dropdown only makes sense for the audit trail (security events
+  // don't have a result field), so hide it on the other tab.
+  document.getElementById("auditResultFilter").style.display = tab === "trail" ? "" : "none";
+  applyAuditFilters();
 }
 
 function resultBadge(result) {
@@ -3029,56 +3246,164 @@ function resultBadge(result) {
   return `<span class="badge ${cls}">${result}</span>`;
 }
 
+function shortDevice(ua) {
+  if (!ua) return "—";
+  let browser = "Unknown";
+  if (/Edg\//.test(ua)) browser = "Edge";
+  else if (/Chrome\//.test(ua) && !/Chromium/.test(ua)) browser = "Chrome";
+  else if (/Firefox\//.test(ua)) browser = "Firefox";
+  else if (/Safari\//.test(ua) && !/Chrome/.test(ua)) browser = "Safari";
+  else if (/curl|Postman|python-requests|HTTPie/i.test(ua)) browser = ua.split("/")[0];
+
+  let os = "Unknown OS";
+  if (/Windows/.test(ua)) os = "Windows";
+  else if (/Mac OS X/.test(ua)) os = "macOS";
+  else if (/Android/.test(ua)) os = "Android";
+  else if (/iPhone|iPad/.test(ua)) os = "iOS";
+  else if (/Linux/.test(ua)) os = "Linux";
+
+  return `${browser} · ${os}`;
+}
+
+function renderAuditTrailRows(rows, total) {
+  const trailWrap = document.getElementById("auditTrailWrap");
+  if (total === 0) {
+    trailWrap.innerHTML = `<div class="empty-note">No audit events recorded yet.</div>`;
+    return;
+  }
+  if (rows.length === 0) {
+    trailWrap.innerHTML = `<div class="empty-note">No audit events match your search.</div>`;
+    return;
+  }
+  trailWrap.innerHTML = `
+    <div class="table-scroll scrollbar-thin">
+    <table class="data-table">
+      <thead><tr><th>Time</th><th>Action</th><th>User</th><th>Target</th><th>Result</th><th>IP Address</th><th>MAC Address</th><th>Device</th><th>Details</th></tr></thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            <td class="mono">${formatTime(r.timestamp)}</td>
+            <td>${escapeHtml(r.action)}</td>
+            <td class="mono">${escapeHtml(r.username || "—")}</td>
+            <td class="mono">${escapeHtml(r.document_key || (r.document_id ? "doc #" + r.document_id : "—"))}</td>
+            <td>${resultBadge(r.result)}</td>
+            <td class="mono">${escapeHtml(r.ip_address || "—")}</td>
+            <td class="mono">${escapeHtml(r.mac_address || "—")}</td>
+            <td title="${escapeHtml(r.user_agent || "")}">${escapeHtml(shortDevice(r.user_agent))}</td>
+            <td class="wrap-cell">${escapeHtml(r.details || "")}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
+    </div>`;
+}
+
+function renderSecurityRows(rows, total) {
+  const secWrap = document.getElementById("securityEventsWrap");
+  if (total === 0) {
+    secWrap.innerHTML = `<div class="empty-note">No blocked security events.</div>`;
+    return;
+  }
+  if (rows.length === 0) {
+    secWrap.innerHTML = `<div class="empty-note">No security events match your search.</div>`;
+    return;
+  }
+  secWrap.innerHTML = `
+    <div class="table-scroll scrollbar-thin">
+    <table class="data-table">
+      <thead><tr><th>Time</th><th>Event</th><th>Message</th></tr></thead>
+      <tbody>
+        ${rows.map(e => `
+          <tr>
+            <td class="mono">${formatTime(e.time)}</td>
+            <td><span class="badge blocked">${escapeHtml(e.event)}</span></td>
+            <td class="wrap-cell">${escapeHtml(e.message || "")}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
+    </div>`;
+}
+
+// Rebuilds the "All results" dropdown from whatever result values are
+// actually present in the loaded rows, so it never drifts out of sync
+// with real data — and keeps whatever the user already had selected,
+// if it's still a valid option.
+function populateAuditResultFilter() {
+  const sel = document.getElementById("auditResultFilter");
+  const distinct = Array.from(new Set(_auditRows.map(r => r.result).filter(Boolean))).sort();
+  const current = sel.value;
+  sel.innerHTML = `<option value="">All results</option>` +
+    distinct.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join("");
+  if (distinct.includes(current)) sel.value = current;
+}
+
+// Re-filters the already-loaded data in memory (no network call) and
+// re-renders whichever tab is active. Runs on every keystroke in the
+// search box, every change of the result dropdown, and every tab switch.
+function applyAuditFilters() {
+  const q = (document.getElementById("auditSearch").value || "").trim().toLowerCase();
+
+  if (auditTab === "trail") {
+    const resultFilter = document.getElementById("auditResultFilter").value;
+    const filtered = _auditRows.filter(r => {
+      if (resultFilter && r.result !== resultFilter) return false;
+      if (!q) return true;
+      const haystack = [
+        r.action, r.username, r.document_key, r.details,
+        r.ip_address, r.mac_address, r.user_agent, r.result,
+        r.document_id != null ? "doc #" + r.document_id : "",
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+    renderAuditTrailRows(filtered, _auditRows.length);
+  } else {
+    const filtered = _securityEvents.filter(e => {
+      if (!q) return true;
+      const haystack = [e.event, e.message].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+    renderSecurityRows(filtered, _securityEvents.length);
+  }
+}
+
+function clearAuditFilters() {
+  document.getElementById("auditSearch").value = "";
+  document.getElementById("auditResultFilter").value = "";
+  applyAuditFilters();
+}
+
 async function loadAuditView() {
   const trailWrap = document.getElementById("auditTrailWrap");
   const secWrap = document.getElementById("securityEventsWrap");
+  const scopeNote = document.getElementById("auditScopeNote");
 
   try {
     const res = await authedFetch("/audit-logs");
     const data = await res.json();
-    const rows = data.audit_log || [];
-    if (rows.length === 0) {
-      trailWrap.innerHTML = `<div class="empty-note">No audit events recorded yet.</div>`;
-    } else {
-      trailWrap.innerHTML = `
-        <table class="data-table">
-          <thead><tr><th>Time</th><th>Action</th><th>User</th><th>Target</th><th>Result</th><th>Details</th></tr></thead>
-          <tbody>
-            ${rows.map(r => `
-              <tr>
-                <td class="mono">${formatTime(r.timestamp)}</td>
-                <td>${escapeHtml(r.action)}</td>
-                <td class="mono">${escapeHtml(r.username || "—")}</td>
-                <td class="mono">${escapeHtml(r.document_key || (r.document_id ? "doc #" + r.document_id : "—"))}</td>
-                <td>${resultBadge(r.result)}</td>
-                <td>${escapeHtml(r.details || "")}</td>
-              </tr>`).join("")}
-          </tbody>
-        </table>`;
-    }
-  } catch (e) { trailWrap.innerHTML = `<div class="empty-note">Couldn't load the audit trail.</div>`; }
+    _auditRows = data.audit_log || [];
 
-  try {
-    const res = await authedFetch("/security-logs");
-    const data = await res.json();
-    const events = data.events || [];
-    if (events.length === 0) {
-      secWrap.innerHTML = `<div class="empty-note">No blocked security events.</div>`;
-    } else {
-      secWrap.innerHTML = `
-        <table class="data-table">
-          <thead><tr><th>Time</th><th>Event</th><th>Message</th></tr></thead>
-          <tbody>
-            ${events.slice().reverse().map(e => `
-              <tr>
-                <td class="mono">${formatTime(e.time)}</td>
-                <td><span class="badge blocked">${escapeHtml(e.event)}</span></td>
-                <td>${escapeHtml(e.message || "")}</td>
-              </tr>`).join("")}
-          </tbody>
-        </table>`;
+    scopeNote.innerText = data.scope === "all_accounts"
+      ? "Owner view — every account's activity is recorded here, including who accessed from which IP address and device."
+      : "Your own account's activity — logins, uploads, edits, key actions, and blocked attempts, including the IP address and device each one came from.";
+
+    populateAuditResultFilter();
+  } catch (e) {
+    _auditRows = [];
+    trailWrap.innerHTML = `<div class="empty-note">Couldn't load the audit trail.</div>`;
+  }
+
+  if (currentRole === "owner") {
+    try {
+      const res = await authedFetch("/security-logs");
+      const data = await res.json();
+      // Most recent first, same ordering as before.
+      _securityEvents = (data.events || []).slice().reverse();
+    } catch (e) {
+      _securityEvents = [];
+      secWrap.innerHTML = `<div class="empty-note">Couldn't load security events.</div>`;
     }
-  } catch (e) { secWrap.innerHTML = `<div class="empty-note">Couldn't load security events.</div>`; }
+  }
+
+  applyAuditFilters();
 }
 
 /* ---------------------------------------------------------------- */

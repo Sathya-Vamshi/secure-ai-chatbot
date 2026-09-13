@@ -23,6 +23,9 @@ document, even by accident.
 """
 
 import time
+import subprocess
+import platform
+import re as _re
 from datetime import datetime, timezone
 
 from backend.database import get_connection
@@ -55,43 +58,121 @@ def reset_attempts(username: str) -> None:
 
 
 # ---------------------------------------------------------------------
+# Best-effort MAC address lookup
+#
+# IMPORTANT, please read before relying on this: an HTTP server can
+# NEVER learn a client's MAC address over the open internet — browsers
+# don't send it, and it isn't part of the IP/TCP/HTTP protocols once
+# traffic has crossed a router. A MAC address only exists on the local
+# network segment between two directly-connected devices.
+#
+# What IS possible, and what this function does: if the server and the
+# person accessing it happen to be on the SAME local network (e.g. an
+# office LAN, a home network, or "server on Mac, client on the same
+# WiFi"), the operating system's own ARP table already knows the MAC
+# address that corresponds to that IP, because it had to find it out
+# to deliver packets on the local segment. We just ask the OS for it.
+# For anyone accessing over the internet / a different network, this
+# will correctly come back empty — there's no way around that, and no
+# tool actually gets around it despite what some products imply.
+# ---------------------------------------------------------------------
+_MAC_CACHE: dict[str, tuple[float, str | None]] = {}
+_MAC_CACHE_TTL_SECONDS = 120
+
+
+def lookup_mac_address(ip_address: str | None) -> str | None:
+    if not ip_address or ip_address in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return None
+
+    cached = _MAC_CACHE.get(ip_address)
+    if cached and (time.time() - cached[0]) < _MAC_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    mac = None
+    mac_pattern = _re.compile(r"([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}")
+    try:
+        system = platform.system()
+        if system == "Windows":
+            output = subprocess.run(["arp", "-a", ip_address], capture_output=True, text=True, timeout=1.5).stdout
+        else:
+            # Works on both Linux and macOS.
+            output = subprocess.run(["arp", "-n", ip_address], capture_output=True, text=True, timeout=1.5).stdout
+        match = mac_pattern.search(output or "")
+        if match:
+            mac = match.group(0).upper().replace("-", ":")
+    except Exception:
+        # ARP tooling missing/unavailable/sandboxed — this is expected
+        # in a lot of environments (containers, cloud hosts). Just
+        # means we don't get a MAC for this request, nothing breaks.
+        mac = None
+
+    _MAC_CACHE[ip_address] = (time.time(), mac)
+    return mac
+
+
+# ---------------------------------------------------------------------
 # Audit log
 # ---------------------------------------------------------------------
 
 def write_audit(action: str, username: str = None, document_key: str = None,
                  document_id: int = None, authorization_id: int = None,
                  old_hash: str = None, new_hash: str = None,
-                 result: str = "SUCCESS", details: str = "") -> None:
+                 result: str = "SUCCESS", details: str = "",
+                 ip_address: str = None, user_agent: str = None,
+                 mac_address: str = None) -> None:
+    if mac_address is None and ip_address:
+        mac_address = lookup_mac_address(ip_address)
+
     connection = get_connection()
     cursor = connection.cursor()
     cursor.execute("""
         INSERT INTO audit_log
         (timestamp, action, username, document_key, document_id,
-         authorization_id, old_hash, new_hash, result, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         authorization_id, old_hash, new_hash, result, details,
+         ip_address, user_agent, mac_address)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         datetime.now(timezone.utc).isoformat(),
         action, username, document_key, document_id,
         authorization_id, old_hash, new_hash, result, details,
+        ip_address, user_agent, mac_address,
     ))
     connection.commit()
     connection.close()
 
 
+_AUDIT_COLUMNS = ["id", "timestamp", "action", "username", "document_key",
+                   "document_id", "authorization_id", "old_hash", "new_hash",
+                   "result", "details", "ip_address", "user_agent", "mac_address"]
+
+
 def get_audit_log(limit: int = 200) -> list[dict]:
+    """Every account's activity — the Owner's view."""
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute("""
-        SELECT id, timestamp, action, username, document_key, document_id,
-               authorization_id, old_hash, new_hash, result, details
+    cursor.execute(f"""
+        SELECT {", ".join(_AUDIT_COLUMNS)}
         FROM audit_log ORDER BY id DESC LIMIT ?
     """, (limit,))
     rows = cursor.fetchall()
     connection.close()
-    cols = ["id", "timestamp", "action", "username", "document_key",
-            "document_id", "authorization_id", "old_hash", "new_hash",
-            "result", "details"]
-    return [dict(zip(cols, row)) for row in rows]
+    return [dict(zip(_AUDIT_COLUMNS, row)) for row in rows]
+
+
+def get_audit_log_for_user(username: str, limit: int = 200) -> list[dict]:
+    """One account's OWN activity only — what every non-owner account
+    sees. Deliberately does not expose other accounts' rows, even ones
+    that mention a shared document, so an employee can't use their own
+    audit view to snoop on someone else's activity."""
+    connection = get_connection()
+    cursor = connection.cursor()
+    cursor.execute(f"""
+        SELECT {", ".join(_AUDIT_COLUMNS)}
+        FROM audit_log WHERE username = ? ORDER BY id DESC LIMIT ?
+    """, (username, limit))
+    rows = cursor.fetchall()
+    connection.close()
+    return [dict(zip(_AUDIT_COLUMNS, row)) for row in rows]
 
 
 # ---------------------------------------------------------------------
